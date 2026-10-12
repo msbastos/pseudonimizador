@@ -12,7 +12,7 @@ Licença: AGPL-3.0-only.
 
 ## Instalação
 
-Baixe `Pseudonimizador-Setup.exe` (cerca de 111 MB) na página de Releases do
+Baixe `Pseudonimizador-Setup.exe` (cerca de 105 MB) na página de Releases do
 repositório (`https://github.com/msbastos/pseudonimizador/releases/latest`) e
 execute-o. Requisitos: Windows 10 (1809 ou mais novo) ou Windows 11, 64 bits;
 instala só para o seu usuário, sem administrador e sem internet.

@@ -54,7 +54,7 @@ regenere o lock.
 O pacote leva `opencv-python-headless` no lugar do `opencv-python` (sem a
 GUI do OpenCV) e não leva `sympy`/`mpmath` (dependência declarada do
 `onnxruntime` que o OCR não usa ao rodar). A fumaça prova que o OCR funciona
-assim. Estado: mantida; `build\app` com 368 MB sem compressão; `Pseudonimizador-Setup.exe` com 111 MB (build de 12/10/2026).
+assim. Estado: mantida; `build\app` com 343 MB sem compressão; `Pseudonimizador-Setup.exe` com 105 MB (build de 12/10/2026, sem .pyc nem lançadores: ver a guarda de identidade do `construir.py`).
 
 ## 3. Aceitação no Windows Sandbox (manual)
 
