@@ -12,11 +12,13 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sys
 import threading
 import time
 from dataclasses import asdict
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Iterator
@@ -24,7 +26,9 @@ from urllib.parse import unquote, urlsplit
 
 from .. import VERSAO
 from ..estado import Config, abrir_log, carregar, preparar_pastas
-from .registro import DocumentoInexistente, Registro
+from ..restaurar import TokenOrfao, mapa_do_docx, restaurar_docx, restaurar_texto
+from ..saida import _destino, mapas
+from .registro import DocumentoInexistente, Registro, validar_nome_upload
 
 PASTA_ESTATICO = Path(__file__).resolve().parent / "estatico"
 ESTATICOS = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
@@ -45,6 +49,9 @@ ROTAS: list[tuple[str, str]] = [
     ("POST", rf"/api/documentos/{RE_ID}/acrescentar"),
     ("POST", rf"/api/documentos/{RE_ID}/gerar"),
     ("POST", rf"/api/documentos/{RE_ID}/abrir"),
+    ("GET", r"/api/mapas"),
+    ("POST", r"/api/restaurar/docx"),
+    ("POST", r"/api/restaurar/texto"),
 ]
 
 
@@ -60,6 +67,20 @@ class ErroDaApi(Exception):
     def __init__(self, status: int, erro: str, mensagem: str, **extra):
         super().__init__(mensagem)
         self.status, self.erro, self.mensagem, self.extra = status, erro, mensagem, extra
+
+
+def listar_mapas(pasta_mapas: Path) -> list[dict]:
+    """Só id e data, nunca o conteúdo. A data vem do próprio id
+    (AAAAMMDD-HHMMSS-xxxx, saida.mapas.novo_id); fora do padrão, do mtime."""
+    saida = []
+    for arq in sorted(Path(pasta_mapas).glob("*.json"), reverse=True):
+        m = re.match(r"(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})", arq.stem)
+        if m:
+            data = f"{m[3]}/{m[2]}/{m[1]} {m[4]}:{m[5]}"
+        else:
+            data = datetime.fromtimestamp(arq.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
+        saida.append({"id": arq.stem, "data": data})
+    return saida
 
 
 def _abrir_no_windows(caminho: Path) -> None:
@@ -267,8 +288,8 @@ class Manipulador(BaseHTTPRequestHandler):
         self._enviar(200, (PASTA_ESTATICO / nome).read_bytes(), ESTATICOS[nome])
 
     def _tratadores(self) -> tuple:
-        """Os blocos da API (as Tasks 6 e 7 acrescentam os seus)."""
-        return (self._api_documentos,)
+        """Os blocos da API (a Task 7 acrescenta o da configuração)."""
+        return (self._api_documentos, self._api_restaurar)
 
     def _api(self, metodo: str, caminho: str) -> None:
         if (metodo, caminho) == ("GET", "/api/estado"):
@@ -364,9 +385,85 @@ class Manipulador(BaseHTTPRequestHandler):
             if d.situacao != "pronto" or not d.resultado:
                 raise ErroDaApi(409, "situacao", "o documento ainda não foi gerado")
             saida = Path(d.resultado["saida"])
-            self.app.abrir_no_windows(saida if alvo == "arquivo" else saida.parent)
+            try:
+                self.app.abrir_no_windows(saida if alvo == "arquivo" else saida.parent)
+            except OSError:
+                raise ErroDaApi(409, "arquivo", "não foi possível abrir: o arquivo ou a pasta não existe mais "
+                                                "(foi apagado ou movido depois da geração)") from None
             self.app.log.info("documento %s: abrir %s", id_, alvo)
             self._json(200, {"ok": True})
+            return True
+        return False
+
+    # --- restaurar -----------------------------------------------------------
+    def _mapa_escolhido(self, id_mapa) -> dict:
+        if not isinstance(id_mapa, str) or not re.fullmatch(r"[0-9A-Za-z_-]{1,80}", id_mapa):
+            raise ErroDaApi(400, "mapa", "escolha um mapa da lista")
+        caminho = mapas.achar(self.app.config.mapas, id_mapa)
+        if caminho is None:
+            raise ErroDaApi(404, "mapa", "mapa não encontrado")
+        return mapas.carregar(caminho)
+
+    def _api_restaurar(self, metodo: str, caminho: str) -> bool:
+        cfg = self.app.config
+        if (metodo, caminho) == ("GET", "/api/mapas"):
+            self._json(200, {"mapas": listar_mapas(cfg.mapas)})
+            return True
+        if (metodo, caminho) == ("POST", "/api/restaurar/texto"):
+            corpo = self._corpo_json()
+            texto = corpo.get("texto")
+            if not isinstance(texto, str) or not texto.strip():
+                raise ErroDaApi(400, "corpo", "cole o texto com os tókens")
+            mapa = self._mapa_escolhido(corpo.get("mapa"))
+            try:
+                restaurado = restaurar_texto(texto, mapa)
+            except TokenOrfao as e:
+                raise ErroDaApi(409, "orfao", str(e)) from None
+            self.app.log.info("restauração de texto colado")
+            self._json(200, {"texto": restaurado})
+            return True
+        if (metodo, caminho) == ("POST", "/api/restaurar/docx"):
+            nome = unquote(self.headers.get("X-Nome-Arquivo") or "")
+            if not nome.strip():
+                raise ErroDaApi(400, "nome", "falta o cabeçalho X-Nome-Arquivo")
+            if Path(nome.replace("\\", "/").rstrip(" .")).suffix.lower() != ".docx":
+                raise ErroDaApi(415, "formato", "só arquivos .docx")
+            try:
+                nome = validar_nome_upload(nome, (".docx",))
+            except ValueError as e:
+                raise ErroDaApi(400, "nome", str(e)) from None
+            id_mapa = self.headers.get("X-Mapa") or ""
+            tamanho, pedacos = self._corpo_bruto(LIMITE_ARQUIVO)
+            if tamanho == 0:
+                raise ErroDaApi(400, "corpo", "arquivo vazio")
+            pasta = self.app.pasta_estado / "tmp" / f"restaurar-{secrets.token_hex(4)}"
+            pasta.mkdir(parents=True)
+            try:
+                origem = pasta / nome
+                with open(origem, "wb") as f:
+                    for pedaco in pedacos:
+                        f.write(pedaco)
+                if id_mapa:
+                    mapa = self._mapa_escolhido(id_mapa)
+                else:
+                    try:
+                        mapa = mapa_do_docx(origem, cfg.mapas)
+                    except Exception:  # noqa: BLE001 — zip/XML inválido
+                        raise ErroDaApi(409, "arquivo", "o arquivo não é um DOCX válido") from None
+                if mapa is None:
+                    raise ErroDaApi(409, "mapa", "Mapa não encontrado para este arquivo; escolha um da lista.")
+                cfg.saida.mkdir(parents=True, exist_ok=True)
+                destino = _destino(cfg.saida, f"{origem.stem} - restaurado", ".docx")
+                try:
+                    n = restaurar_docx(origem, destino, mapa)
+                except TokenOrfao as e:
+                    raise ErroDaApi(409, "orfao", str(e)) from None
+                except Exception:  # noqa: BLE001
+                    raise ErroDaApi(409, "arquivo", "o arquivo não é um DOCX válido") from None
+            finally:
+                shutil.rmtree(pasta, ignore_errors=True)
+            self.app.log.info("restauração de DOCX: %d troca(s)", n)
+            self._json(200, {"ok": True, "saida_nome": destino.name, "trocas": n})
             return True
         return False
 

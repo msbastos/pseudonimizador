@@ -33,6 +33,22 @@ _RESERVADOS = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
                *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
+def validar_nome_upload(nome: str, aceitos: tuple[str, ...]) -> str:
+    """Nome de arquivo recebido da janela: só o último componente, extensão
+    aceita, sem caracteres proibidos, curto e permitido no Windows. Levanta
+    ValueError com a mensagem para o usuário."""
+    nome = Path(str(nome).replace("\\", "/")).name
+    if not nome or nome in (".", "..") or Path(nome).suffix.lower() not in aceitos:
+        raise ValueError("só arquivos " + " ou ".join(aceitos))
+    if any(c in _PROIBIDOS or ord(c) < 32 for c in nome):
+        raise ValueError("nome de arquivo com caracteres não permitidos")
+    if len(nome) > LIMITE_NOME:
+        raise ValueError(f"nome de arquivo longo demais (máximo {LIMITE_NOME} caracteres)")
+    if nome[-1] in ". " or nome.split(".", 1)[0].rstrip(" ").upper() in _RESERVADOS:
+        raise ValueError("nome de arquivo não permitido no Windows")
+    return nome
+
+
 class DocumentoInexistente(LookupError):
     """Id que não está (ou já não está) no registro."""
 
@@ -116,15 +132,7 @@ class Registro:
 
     # --- entrada -------------------------------------------------------------
     def registrar_upload(self, nome: str, pedacos: Iterable[bytes]) -> Doc:
-        nome = Path(str(nome).replace("\\", "/")).name
-        if not nome or nome in (".", "..") or Path(nome).suffix.lower() not in ACEITOS:
-            raise ValueError("só arquivos .docx ou .pdf")
-        if any(c in _PROIBIDOS or ord(c) < 32 for c in nome):
-            raise ValueError("nome de arquivo com caracteres não permitidos")
-        if len(nome) > LIMITE_NOME:
-            raise ValueError(f"nome de arquivo longo demais (máximo {LIMITE_NOME} caracteres)")
-        if nome[-1] in ". " or nome.split(".", 1)[0].rstrip(" ").upper() in _RESERVADOS:
-            raise ValueError("nome de arquivo não permitido no Windows")
+        nome = validar_nome_upload(nome, ACEITOS)
         id_ = secrets.token_hex(8)
         with self._trava:
             if self._encerrado:

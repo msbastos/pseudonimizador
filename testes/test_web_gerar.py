@@ -2,8 +2,6 @@
 # Termo adicional (AGPL-3.0, seção 7(b)): preservar os avisos de autoria; ver CREDITOS.md.
 """Gerar pela janela, resultado, abrir arquivo/pasta (injetado) e o vazamento na tela."""
 import _base  # noqa: F401
-from pathlib import Path
-
 import fabrica as F
 from _web import ServidorDeTeste
 from pseudonimizador.leitura import ler
@@ -39,6 +37,17 @@ def test_gerar_resultado_e_abrir():
         assert s.post(f"/api/documentos/{id_}/abrir", {"alvo": "outro"})[0] == 400
         assert s.post(f"/api/documentos/{id_}/gerar", {"formato": "layout", "modo": "reversivel"})[0] == 409
         assert s.post(f"/api/documentos/{id_}/decisao", {"categoria": "cpf", "valor": F.CPF, "aceito": False})[0] == 409
+
+
+def test_abrir_arquivo_apagado_da_409():
+    def abridor(caminho):
+        raise FileNotFoundError(caminho)
+    with ServidorDeTeste("web_gerar_abrir", abrir_no_windows=abridor) as s:
+        id_ = _enviar_e_revisar(s)
+        assert s.post(f"/api/documentos/{id_}/gerar", {"formato": "layout", "modo": "reversivel"})[0] == 202
+        assert s.esperar(id_, "pronto", "erro")["situacao"] == "pronto"
+        status, e = s.post(f"/api/documentos/{id_}/abrir", {"alvo": "arquivo"})
+        assert status == 409 and e["erro"] == "arquivo" and "não existe mais" in e["mensagem"], (status, e)
 
 
 def test_gerar_com_padroes_da_config_e_valores_invalidos():
