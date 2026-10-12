@@ -20,7 +20,7 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Iterator
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .. import VERSAO
 from ..estado import Config, abrir_log, carregar, preparar_pastas
@@ -37,7 +37,21 @@ RE_ID = r"[0-9a-f]{16}"
 ROTAS: list[tuple[str, str]] = [
     ("GET", r"/api/estado"),
     ("POST", r"/api/encerrar"),
+    ("GET", r"/api/documentos"),
+    ("POST", r"/api/documentos"),
+    ("GET", rf"/api/documentos/{RE_ID}"),
+    ("DELETE", rf"/api/documentos/{RE_ID}"),
+    ("POST", rf"/api/documentos/{RE_ID}/decisao"),
+    ("POST", rf"/api/documentos/{RE_ID}/acrescentar"),
 ]
+
+
+def _iguais(a, b: str) -> bool:
+    """Comparação em tempo constante sobre bytes UTF-8: hmac.compare_digest
+    levanta TypeError para str não ASCII."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    return hmac.compare_digest(a.encode("utf-8", "surrogatepass"), b.encode("utf-8", "surrogatepass"))
 
 
 class ErroDaApi(Exception):
@@ -86,7 +100,7 @@ class Aplicacao:
             return False
         with self._trava:
             tokens = list(self._tokens)
-        return any(hmac.compare_digest(token, t) for t in tokens)
+        return any(_iguais(token, t) for t in tokens)
 
     def hosts(self) -> set[str]:
         return {f"127.0.0.1:{self.porta}", f"localhost:{self.porta}"}
@@ -225,7 +239,7 @@ class Manipulador(BaseHTTPRequestHandler):
         if metodo == "POST" and caminho in ("/abrir", "/encerrar"):
             # vem de outro processo local (a segunda abertura), com o segredo do instancia.json
             segredo = self._corpo_json().get("segredo")
-            if not isinstance(segredo, str) or not hmac.compare_digest(segredo, app.segredo):
+            if not _iguais(segredo, app.segredo):
                 raise ErroDaApi(403, "segredo", "segredo de abertura inválido")
             if caminho == "/abrir":
                 app.batimento()
@@ -249,8 +263,8 @@ class Manipulador(BaseHTTPRequestHandler):
         self._enviar(200, (PASTA_ESTATICO / nome).read_bytes(), ESTATICOS[nome])
 
     def _tratadores(self) -> tuple:
-        """Os blocos da API (as Tasks 4, 6 e 7 acrescentam os seus)."""
-        return ()
+        """Os blocos da API (as Tasks 6 e 7 acrescentam os seus)."""
+        return (self._api_documentos,)
 
     def _api(self, metodo: str, caminho: str) -> None:
         if (metodo, caminho) == ("GET", "/api/estado"):
@@ -267,6 +281,71 @@ class Manipulador(BaseHTTPRequestHandler):
         if any(re.fullmatch(padrao, caminho) for _, padrao in ROTAS):
             raise ErroDaApi(405, "metodo", "método não permitido")
         raise ErroDaApi(404, "nao_encontrado", "rota desconhecida")
+
+    # --- documentos ----------------------------------------------------------
+    def _api_documentos(self, metodo: str, caminho: str) -> bool:
+        reg = self.app.registro
+        if caminho == "/api/documentos":
+            if metodo == "GET":
+                self._json(200, {"documentos": reg.lista()})
+                return True
+            if metodo == "POST":
+                nome = unquote(self.headers.get("X-Nome-Arquivo") or "").strip()
+                if not nome:
+                    raise ErroDaApi(400, "nome", "falta o cabeçalho X-Nome-Arquivo")
+                if Path(nome.replace("\\", "/")).suffix.lower() not in (".docx", ".pdf"):
+                    raise ErroDaApi(415, "formato", "só arquivos .docx ou .pdf")
+                tamanho, pedacos = self._corpo_bruto(LIMITE_ARQUIVO)
+                if tamanho == 0:
+                    raise ErroDaApi(400, "corpo", "arquivo vazio")
+                try:
+                    doc = reg.registrar_upload(nome, pedacos)
+                except ValueError as e:        # formato já conferido acima: sobra o nome com caracteres proibidos
+                    raise ErroDaApi(400, "nome", str(e)) from None
+                except RuntimeError as e:      # o programa está encerrando
+                    raise ErroDaApi(503, "encerrando", str(e)) from None
+                self._json(202, {"id": doc.id, "nome": doc.nome, "situacao": doc.situacao})
+                return True
+            return False
+        m = re.fullmatch(rf"/api/documentos/({RE_ID})(?:/(decisao|acrescentar|gerar|abrir))?", caminho)
+        if not m:
+            return False
+        id_, acao = m.group(1), m.group(2)
+        try:
+            if acao is None and metodo == "GET":
+                self._json(200, reg.detalhe(id_))
+                return True
+            if acao is None and metodo == "DELETE":
+                reg.descartar(id_)
+                self._json(200, {"ok": True})
+                return True
+            if metodo != "POST" or acao is None:
+                raise ErroDaApi(405, "metodo", "método não permitido")
+            corpo = self._corpo_json()
+            if acao == "decisao":
+                aceito = corpo.get("aceito")
+                if not isinstance(aceito, bool):
+                    raise ErroDaApi(400, "corpo", "aceito deve ser true ou false")
+                reg.decidir(id_, str(corpo.get("categoria") or ""), str(corpo.get("valor") or ""), aceito)
+                self._json(200, {"ok": True})
+                return True
+            if acao == "acrescentar":
+                item = reg.acrescentar(id_, str(corpo.get("valor") or ""), str(corpo.get("categoria") or "pessoa"))
+                self._json(200, {"ok": True, "item": item})
+                return True
+            return self._acao_de_geracao(id_, acao, corpo)
+        except KeyError:
+            raise ErroDaApi(404, "documento", "documento não encontrado") from None
+        except LookupError as e:
+            raise ErroDaApi(404, "item", str(e)) from None
+        except ValueError as e:
+            raise ErroDaApi(409, "valor", str(e)) from None
+        except RuntimeError as e:
+            raise ErroDaApi(409, "situacao", str(e)) from None
+
+    def _acao_de_geracao(self, id_: str, acao: str, corpo: dict) -> bool:
+        """gerar e abrir: Task 5."""
+        return False
 
 
 class Servidor(ThreadingHTTPServer):

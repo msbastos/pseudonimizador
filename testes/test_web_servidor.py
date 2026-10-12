@@ -4,6 +4,7 @@
 abertura por segredo e encerramento."""
 import _base  # noqa: F401
 import time
+import urllib.error
 import urllib.request
 
 from _web import ServidorDeTeste
@@ -77,6 +78,63 @@ def test_encerrar_por_segredo_e_por_inatividade():
         s.thread.join(5)
         assert not s.thread.is_alive() and s.servidor.encerrado
     assert "inatividade" in s.log_texto()
+
+
+def test_nao_ascii_no_token_e_no_segredo_da_403_nao_500():
+    with ServidorDeTeste("web_srv7") as s:
+        # http.client só envia latin-1 nos cabeçalhos: "é" chega como o byte 0xE9
+        status, r = s.get("/api/estado", token="é")
+        assert status == 403 and r["erro"] == "token", (status, r)
+        status, r = s.post("/abrir", {"segredo": "é"}, token=False)
+        assert status == 403 and r["erro"] == "segredo", (status, r)
+        status, r = s.post("/encerrar", {"segredo": "日本"}, token=False)
+        assert status == 403, (status, r)
+
+
+def test_host_errado_ou_ausente_e_recusado_em_tudo():
+    import http.client
+    with ServidorDeTeste("web_srv8") as s:
+        mau = f"exemplo.com.br:{s.porta}"
+        for caminho in ("/", "/estatico/app.css"):
+            assert s.get(caminho, token=False, host=mau)[0] == 403, caminho
+        assert s.post("/abrir", {"segredo": s.app.segredo}, token=False, host=mau)[0] == 403
+        assert s.post("/encerrar", {"segredo": s.app.segredo}, token=False, host=mau)[0] == 403
+        assert not s.app.encerrar_pedido
+        con = http.client.HTTPConnection("127.0.0.1", s.porta, timeout=10)
+        con.putrequest("GET", "/api/estado", skip_host=True)      # sem cabeçalho Host
+        con.putheader("X-Token", s.token)
+        con.endheaders()
+        assert con.getresponse().status == 403
+        con.close()
+
+
+def test_corpo_de_abrir_texto_simples_ou_grande_demais():
+    import http.client
+    with ServidorDeTeste("web_srv9") as s:
+        status, r = s.pedir("POST", "/abrir", b"x", {"Content-Type": "text/plain"}, token=False)
+        assert status == 400 and r["erro"] == "corpo", (status, r)
+        con = http.client.HTTPConnection("127.0.0.1", s.porta, timeout=10)
+        con.putrequest("POST", "/abrir")
+        con.putheader("Content-Type", "application/json")
+        con.putheader("Content-Length", str(3 * 1024 * 1024))     # acima de LIMITE_JSON, corpo nunca enviado
+        con.endheaders()
+        assert con.getresponse().status == 413
+        con.close()
+
+
+def test_toda_resposta_leva_referrer_policy():
+    with ServidorDeTeste("web_srv10") as s:
+        for metodo, caminho, com_token in (("GET", "/", False), ("GET", "/estatico/app.css", False),
+                                           ("GET", "/api/estado", True), ("GET", "/api/estado", False),
+                                           ("GET", "/nada", False), ("PUT", "/api/estado", True)):
+            req = urllib.request.Request(f"http://127.0.0.1:{s.porta}{caminho}", method=metodo,
+                                         headers={"X-Token": s.token} if com_token else {})
+            try:
+                resp = urllib.request.urlopen(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                resp = e
+            assert resp.headers["Referrer-Policy"] == "no-referrer", (metodo, caminho, resp.status)
+            resp.close()
 
 
 if __name__ == "__main__":
