@@ -506,6 +506,106 @@ def test_fumaca_roda_de_verdade_no_python_embarcado_quando_ha_build():
     assert r.returncode == 0, (r.stdout[-800:], r.stderr[-800:])
 
 
+def _iss() -> str:
+    bruto = (RAIZ / "empacotamento" / "pseudonimizador.iss").read_bytes()
+    assert bruto.startswith(b"\xef\xbb\xbf"), "o .iss precisa de BOM UTF-8 (o ISCC lê os acentos assim)"
+    return bruto.decode("utf-8-sig")
+
+
+def _secao(iss: str, nome: str) -> list[str]:
+    corpo = iss.split(f"[{nome}]")[1].split("\n[")[0]
+    return [l.strip() for l in corpo.splitlines() if l.strip() and not l.strip().startswith(";")]
+
+
+def test_icone_e_um_ico_valido_com_varios_tamanhos():
+    import struct
+    dados = (RAIZ / "empacotamento" / "pseudonimizador.ico").read_bytes()
+    reservado, tipo, n = struct.unpack("<HHH", dados[:6])
+    assert (reservado, tipo) == (0, 1) and n >= 3
+    for i in range(n):
+        _, _, _, _, _, _, tam, desl = struct.unpack("<BBBBHHII", dados[6 + 16 * i:22 + 16 * i])
+        assert 0 < tam and desl + tam <= len(dados)
+
+
+def test_iss_instala_sem_administrador_so_x64_e_fecha_o_app_aberto():
+    from pseudonimizador.web import abrir
+    iss = _iss()
+    for exigido in ("PrivilegesRequired=lowest", "DefaultDirName={localappdata}\\Programs\\Pseudonimizador",
+                    "DisableDirPage=yes", "DisableProgramGroupPage=yes", "ArchitecturesAllowed=x64compatible",
+                    "ArchitecturesInstallIn64BitMode=x64compatible", "MinVersion=10.0.17763",
+                    f"AppMutex={abrir.NOME_MUTEX}", "CloseApplications=yes", "OutputBaseFilename=Pseudonimizador-Setup",
+                    "SetupIconFile=pseudonimizador.ico", "Languages\\BrazilianPortuguese.isl", "AppVersion={#Versao}",
+                    '#error Passe /DVersao', 'Parameters: "-X utf8 -m pseudonimizador"', 'WorkingDir: "{app}"',
+                    "python\\pythonw.exe", "{userdesktop}\\Pseudonimizador", "Tasks: atalho",
+                    "Flags: postinstall nowait skipifsilent"):
+        assert exigido in iss, exigido
+    for proibido in ("{pf}", "{commonpf", "{commonappdata}", "runascurrentuser", "PrivilegesRequired=admin",
+                     "C:\\Users", "DirectML", "claude", "Mistral", "agendado"):
+        assert proibido not in iss, proibido
+
+
+def test_iss_pagina_da_pasta_chama_configurar_e_avisa_se_falhar():
+    iss = _iss()
+    assert "CreateInputDirPage(" in iss and "{userdocs}\\Pseudonimizador" in iss
+    assert "'Entrada'" not in iss and "Entrada" in iss and "Saida" in iss and "Mapas" in iss   # a explicação da página
+    passo = iss.split("procedure CurStepChanged")[1].split("\nend;")[0]
+    assert "configurar --pasta-base" in passo and "SW_HIDE" in passo and "ewWaitUntilTerminated" in passo
+    assert "python\\python.exe" in passo and "RemoveBackslashUnlessRoot" in passo    # aspas: "C:\x\" quebraria
+    assert "Codigo <> 0" in passo and "ConfigFalhou := True" in passo and "SuppressibleMsgBox" in passo
+    assert "  MsgBox(" not in passo                              # silencioso nunca trava numa caixa
+    fim = iss.split("procedure CurPageChanged")[1].split("\nend;")[0]
+    assert "ConfigFalhou" in fim and "Configurações" in fim and "AdjustLabelHeight" in fim
+
+
+def test_iss_pula_a_pagina_da_pasta_na_atualizacao():
+    iss = _iss()
+    pular = iss.split("function ShouldSkipPage")[1].split("\nend;")[0]
+    assert "PaginaPasta.ID" in pular and "ConfigExiste" in pular
+    assert "{localappdata}\\Pseudonimizador\\config.json" in iss
+    passo = iss.split("procedure CurStepChanged")[1].split("\nend;")[0]
+    assert "if ConfigExiste then exit" in passo                  # config existente nunca é sobrescrita pelo Setup
+
+
+def test_iss_instalacao_nova_limpa_so_as_pastas_do_programa():
+    iss = _iss()
+    assert _secao(iss, "InstallDelete") == ['Type: filesandordirs; Name: "{app}\\python"',
+                                            'Type: filesandordirs; Name: "{app}\\pseudonimizador"']
+    assert iss.index("[InstallDelete]") < iss.index("[Files]")
+
+
+def test_iss_pergunta_de_apagar_dados_padrao_nao_e_silencio_respeitado():
+    iss = _iss()
+    assert _secao(iss, "UninstallDelete") == ['Type: filesandordirs; Name: "{app}"']
+    assert "[UninstallRun]" not in iss and "function InitializeUninstall" not in iss
+    codigo = iss.split("procedure CurUninstallStepChanged")[1]
+    assert "UninstallSilent" in codigo and "MB_DEFBUTTON2" in codigo and "MB_YESNO" in codigo
+    assert "ApagarDadosResposta := False" in codigo.split("UninstallSilent")[1].split("else")[0]
+    assert "DelTree(ExpandConstant('{localappdata}\\Pseudonimizador')" in codigo
+    assert "nunca é apagada" in codigo and "userdocs" not in codigo and "pasta_base" not in codigo
+
+
+def test_wsb_do_sandbox_mapeia_o_dist_so_leitura_sem_rede_e_abre_o_setup():
+    from empacotamento import construir
+    modelo = RAIZ / "empacotamento" / "sandbox.wsb.modelo"
+    with tempfile.TemporaryDirectory() as d:
+        texto = construir.gerar_wsb(modelo, Path(d) / "dist")
+        assert str((Path(d) / "dist").resolve()) in texto and "{DIST}" not in texto
+    assert "<ReadOnly>true</ReadOnly>" in texto and "<Networking>Disable</Networking>" in texto
+    assert "<VGpu>Enable</VGpu>" in texto and "Pseudonimizador-Setup.exe" in texto
+    assert "C:\\Users" not in modelo.read_text(encoding="utf-8")        # nem o usuário padrão do Sandbox
+    assert "<SandboxFolder>" not in texto                                  # sem SandboxFolder, cai na Área de Trabalho
+
+
+def test_roteiro_do_mantenedor_cobre_montagem_aceitacao_e_limites():
+    texto = (RAIZ / "empacotamento" / "README.md").read_text(encoding="utf-8")
+    for exigido in ("construir.py", "--so-montar", "--crt", "--iscc", "gerar_lock.py", "python-embarcavel.toml",
+                    "Pseudonimizador-Sandbox.wsb", "SHA256SUMS.txt", "Pseudonimizador-Setup.exe", "SmartScreen",
+                    "Redução de tamanho", "Aceitação no Windows Sandbox", "Instala sem pedir administrador",
+                    "Pasta dos arquivos", "DOCX", "PDF com texto", "PDF escaneado", "Restaurar", "Encerrar",
+                    "Desinstalar", "nunca apaga", "Atualização por cima", "verificar_publicacao.py"):
+        assert exigido in texto, exigido
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())
