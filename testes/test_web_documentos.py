@@ -39,7 +39,9 @@ def test_upload_lista_detalhe_decisao_acrescentar_descartar():
         assert s.delete(f"/api/documentos/{id_}")[0] == 200
         assert not (s.pasta / "estado" / "tmp" / id_).exists()
         assert s.get(f"/api/documentos/{id_}")[0] == 404
-        assert s.delete(f"/api/documentos/{id_}")[0] == 404
+        status, e = s.delete(f"/api/documentos/{id_}")
+        assert status == 404 and e["erro"] == "documento"
+        assert s.post(f"/api/documentos/{id_}/decisao", {"aceito": True})[1]["erro"] == "documento"
         assert s.get("/api/documentos")[1]["documentos"] == []
 
 
@@ -88,6 +90,34 @@ def test_nome_invalido_e_estado_errado_dao_4xx_nunca_500():
         s.app.registro.encerrar(timeout=30)                       # depois do encerramento, o upload é recusado
         status, e = s.pedir("POST", "/api/documentos", b"abc", {"X-Nome-Arquivo": "a.docx"})
         assert status == 503 and e["erro"] == "encerrando", (status, e)
+
+
+def test_nomes_longos_reservados_e_sem_tamanho_dao_400():
+    from urllib.parse import quote
+    with ServidorDeTeste("web_docs5") as s:
+        ruins = ["a" * 300 + ".docx", "con.docx", "NUL.pdf", "Com1.docx", "lpt9.tar.docx", "CONIN$.docx",
+                 "CONOUT$.pdf", "aux.x.pdf", "a.docx.", "a.docx ", "PRN .docx"]
+        for ruim in ruins:
+            status, r = s.pedir("POST", "/api/documentos", b"abc", {"X-Nome-Arquivo": quote(ruim)})
+            assert status in (400, 415) and (status == 415 or r["erro"] == "nome"), (ruim[:20], status, r)
+        for ruim in ("a" * 300 + ".docx", "con.docx", "NUL.pdf", "lpt9.tar.docx", "CONIN$.docx"):
+            status, r = s.pedir("POST", "/api/documentos", b"abc", {"X-Nome-Arquivo": quote(ruim)})
+            assert status == 400 and r["erro"] == "nome", (ruim[:20], status, r)
+        assert s.pedir("POST", "/api/documentos", b"abc", {"X-Nome-Arquivo": "comum.docx"})[0] == 202
+        assert not [p for p in (s.pasta / "estado" / "tmp").iterdir() if p.is_file()]
+        # sem Content-Length (corpo em pedaços)
+        con = http.client.HTTPConnection("127.0.0.1", s.porta, timeout=30)
+        con.putrequest("POST", "/api/documentos")
+        con.putheader("X-Token", s.token)
+        con.putheader("X-Nome-Arquivo", "b.docx")
+        con.putheader("Transfer-Encoding", "chunked")
+        con.endheaders()
+        con.send(b"3\r\nabc\r\n0\r\n\r\n")
+        resp = con.getresponse()
+        assert resp.status == 400 and "não informado" in resp.read().decode("utf-8")
+        con.close()
+        status, r = s.pedir("POST", "/api/documentos", b"", {"X-Nome-Arquivo": "a.docx"})
+        assert status == 400 and "vazio" in r["mensagem"]
 
 
 def test_log_nunca_leva_nome_de_arquivo_nem_valores():

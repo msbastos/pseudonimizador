@@ -24,7 +24,7 @@ from urllib.parse import unquote, urlsplit
 
 from .. import VERSAO
 from ..estado import Config, abrir_log, carregar, preparar_pastas
-from .registro import Registro
+from .registro import DocumentoInexistente, Registro
 
 PASTA_ESTATICO = Path(__file__).resolve().parent / "estatico"
 ESTATICOS = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
@@ -189,6 +189,8 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def _corpo_bruto(self, limite: int = LIMITE_ARQUIVO) -> tuple[int, Iterator[bytes]]:
         """O corpo cru em pedaços; a recusa por tamanho acontece ANTES de ler."""
+        if self.headers.get("Content-Length") is None:
+            raise ErroDaApi(400, "corpo", "tamanho do arquivo não informado")
         tamanho = self._tamanho_anunciado(limite)
 
         def pedacos():
@@ -290,10 +292,10 @@ class Manipulador(BaseHTTPRequestHandler):
                 self._json(200, {"documentos": reg.lista()})
                 return True
             if metodo == "POST":
-                nome = unquote(self.headers.get("X-Nome-Arquivo") or "").strip()
-                if not nome:
+                nome = unquote(self.headers.get("X-Nome-Arquivo") or "")
+                if not nome.strip():
                     raise ErroDaApi(400, "nome", "falta o cabeçalho X-Nome-Arquivo")
-                if Path(nome.replace("\\", "/")).suffix.lower() not in (".docx", ".pdf"):
+                if Path(nome.replace("\\", "/").rstrip(" .")).suffix.lower() not in (".docx", ".pdf"):
                     raise ErroDaApi(415, "formato", "só arquivos .docx ou .pdf")
                 tamanho, pedacos = self._corpo_bruto(LIMITE_ARQUIVO)
                 if tamanho == 0:
@@ -334,7 +336,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "item": item})
                 return True
             return self._acao_de_geracao(id_, acao, corpo)
-        except KeyError:
+        except DocumentoInexistente:
             raise ErroDaApi(404, "documento", "documento não encontrado") from None
         except LookupError as e:
             raise ErroDaApi(404, "item", str(e)) from None

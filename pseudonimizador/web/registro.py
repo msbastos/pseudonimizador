@@ -28,6 +28,13 @@ CATEGORIAS = tuple(PREFIXOS)
 ORIGENS = ("janela", "pasta")
 ACEITOS = (".docx", ".pdf")
 _PROIBIDOS = set('<>:"|?*')      # inclui o ":" dos fluxos alternativos do NTFS
+LIMITE_NOME = 150
+_RESERVADOS = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+               *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+class DocumentoInexistente(LookupError):
+    """Id que não está (ou já não está) no registro."""
 
 
 class Fila:
@@ -114,6 +121,10 @@ class Registro:
             raise ValueError("só arquivos .docx ou .pdf")
         if any(c in _PROIBIDOS or ord(c) < 32 for c in nome):
             raise ValueError("nome de arquivo com caracteres não permitidos")
+        if len(nome) > LIMITE_NOME:
+            raise ValueError(f"nome de arquivo longo demais (máximo {LIMITE_NOME} caracteres)")
+        if nome[-1] in ". " or nome.split(".", 1)[0].rstrip(" ").upper() in _RESERVADOS:
+            raise ValueError("nome de arquivo não permitido no Windows")
         id_ = secrets.token_hex(8)
         with self._trava:
             if self._encerrado:
@@ -125,6 +136,9 @@ class Registro:
             with open(caminho, "wb") as f:
                 for pedaco in pedacos:
                     f.write(pedaco)
+        except OSError:
+            shutil.rmtree(pasta, ignore_errors=True)
+            raise ValueError("não foi possível gravar o arquivo") from None
         except BaseException:
             shutil.rmtree(pasta, ignore_errors=True)
             raise
@@ -181,7 +195,10 @@ class Registro:
     # --- consulta ------------------------------------------------------------
     def obter(self, id_: str) -> Doc:
         with self._trava:
-            return self._docs[id_]
+            try:
+                return self._docs[id_]
+            except KeyError:
+                raise DocumentoInexistente(id_) from None
 
     def _resumo(self, d: Doc) -> dict:
         return {"id": d.id, "nome": d.nome, "origem": d.origem, "situacao": d.situacao,
@@ -304,7 +321,9 @@ class Registro:
     # --- saída ---------------------------------------------------------------
     def descartar(self, id_: str) -> Doc:
         with self._trava:
-            d = self._docs.pop(id_)
+            d = self._docs.pop(id_, None)
+            if d is None:
+                raise DocumentoInexistente(id_)
             d.descartado = True
         self._apagar_tmp(d)            # se a leitura segura o arquivo, _ler_doc apaga depois
         self._log.info("documento %s descartado", id_)
