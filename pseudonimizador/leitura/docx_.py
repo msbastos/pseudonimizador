@@ -80,21 +80,36 @@ def paragrafos(doc) -> list[Paragraph]:
     return saida
 
 
+_ENVOLTORIOS = tuple(qn(t) for t in ("w:hyperlink", "w:smartTag", "w:customXml", "w:fldSimple"))
+
+
 def runs_do_paragrafo(par: Paragraph) -> list[Run]:
+    """Os runs em ordem de documento, inclusive dentro de hyperlink, smartTag,
+    customXml, fldSimple e sdt em linha (recursivo)."""
     runs: list[Run] = []
-    for item in par.iter_inner_content():
-        if isinstance(item, Run):
-            runs.append(item)
-        else:                                   # Hyperlink
-            runs.extend(item.runs)
+
+    def andar(elemento) -> None:
+        for filho in elemento.iterchildren():
+            if filho.tag == qn("w:r"):
+                runs.append(Run(filho, par))
+            elif filho.tag in _ENVOLTORIOS:
+                andar(filho)
+            elif filho.tag == qn("w:sdt"):
+                conteudo = filho.find(qn("w:sdtContent"))
+                if conteudo is not None:
+                    andar(conteudo)
+
+    andar(par._p)
     return runs
 
 
 def _abrir(caminho: Path):
     import docx
+    from docx.opc.exceptions import PackageNotFoundError
+    from lxml.etree import XMLSyntaxError
     try:
         return docx.Document(str(caminho))
-    except (zipfile.BadZipFile, KeyError, ValueError, OSError) as e:
+    except (zipfile.BadZipFile, KeyError, ValueError, OSError, PackageNotFoundError, XMLSyntaxError) as e:
         raise ErroDeLeitura(f"não foi possível abrir o DOCX: {Path(caminho).name}") from e
 
 
