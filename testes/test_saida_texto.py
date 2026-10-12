@@ -6,7 +6,8 @@ import fitz
 import fabrica as F
 from pseudonimizador.saida.texto import gerar_docx_texto, gerar_pdf_texto
 
-TEXTO = "Primeira linha com [[PESSOA_1]].\nCláusula 2ª — acentuação: ação, côncavo."
+TEXTO = ("Primeira linha com [[PESSOA_1]].\nCláusula 2ª — acentuação: ação, côncavo.\n"
+         "a < b & c\n\nfim.")
 
 
 def test_docx_texto():
@@ -22,7 +23,7 @@ def test_pdf_texto():
     gerar_pdf_texto(TEXTO, destino)
     with fitz.open(str(destino)) as pdf:
         extraido = "".join(p.get_text() for p in pdf)
-        assert "[[PESSOA_1]]" in extraido and "côncavo" in extraido
+        assert "[[PESSOA_1]]" in extraido and "côncavo" in extraido and "a < b & c" in extraido
         assert not (pdf.metadata.get("author") or "")
 
 
