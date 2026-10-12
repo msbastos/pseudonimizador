@@ -100,6 +100,32 @@ def test_prenome_raro_antes_do_nome_nas_assinaturas_nao_escapa():
     assert "Cláusula primeira" in texto, texto
 
 
+def test_nome_seguido_de_endereco_na_linha_de_baixo_nao_engole_o_endereco():
+    from types import SimpleNamespace
+    from pseudonimizador.motor.trocas import aplicar_trocas
+    for texto, numero in (("Locador: Maria Souza\nRua das Flores, 100, Centro", "100"),
+                          ("À Sra. Maria Souza\nRua Marechal Deodoro, 1500, apto 21", "1500"),
+                          ("Locador: Maria Souza\nAvenida Getúlio Vargas, 1500", "1500")):
+        doc = SimpleNamespace(texto=texto, tipo="pdf_texto")
+        saida = aplicar_trocas(texto, Revisao(doc).fechar().trocas)
+        assert numero not in saida and "Maria" not in saida, (texto, saida)
+
+
+def test_docx_com_nome_em_dois_paragrafos_restaura_igual_ao_original():
+    pasta = F.pasta_temporaria("ponta_docx_dois_paragrafos")
+    caminho = pasta / "d.docx"
+    d = docx.Document()
+    d.add_paragraph("Titular: Zuleiva Maria")
+    d.add_paragraph("Fernandes, inscrita no CPF 111.444.777-35.")
+    d.save(str(caminho))
+    doc = ler(caminho)
+    g = gerar(doc, Revisao(doc).fechar(), formato="layout", modo="reversivel",
+              pasta_saida=pasta / "Saida", pasta_mapas=pasta / "Mapas")
+    restaurado = pasta / "restaurado.docx"
+    restaurar_docx(g.saida, restaurado, mapa_do_docx(g.saida, pasta / "Mapas"))
+    assert ler(restaurado).texto == doc.texto
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

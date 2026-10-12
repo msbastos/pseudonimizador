@@ -136,6 +136,29 @@ def test_rodape_vai_para_o_fim_do_texto_e_mantem_a_origem():
     assert o.pagina == 1
 
 
+def test_cabecalho_baixo_selo_vertical_e_cabecalho_repetido_nao_ficam_entre_as_paginas():
+    caminho = F.pasta_temporaria("leitura_pdf12") / "m.pdf"
+    doc = fitz.open()
+    f = dict(fontname="helv", fontsize=11)
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((72, 60), "Cabeçalho Baixo Sintético", **f)                       # baseline ~60 pt (7%)
+    p1.insert_text((72, 200), "Contrato Sintético de Prestação de Serviços", **f)    # repete na página 2, no corpo
+    p1.insert_text((72, 700), "Titular: Zuleiva Maria", **f)
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((72, 60), "Cabeçalho Baixo Sintético", **f)
+    p2.insert_text((72, 200), "Contrato Sintético de Prestação de Serviços", **f)
+    p2.insert_text((300, 400), "Selo vertical no meio", rotate=90, **f)               # linha não horizontal
+    p2.insert_text((18, 500), "Selo na margem lateral", rotate=90, **f)
+    p2.insert_text((72, 300), "Fernandes, inscrita no CPF 111.444.777-35.", **f)
+    doc.save(str(caminho))
+    t = ler_pdf(caminho).texto
+    assert "Zuleiva Maria\nFernandes" in t, repr(t)
+    depois = t.index("Fernandes")
+    for lixo in ("Cabeçalho Baixo Sintético", "Selo vertical no meio", "Selo na margem lateral",
+                 "Contrato Sintético de Prestação"):
+        assert lixo in t and t.index(lixo) > depois, (lixo, t)
+
+
 def test_pdf_com_senha_levanta_erro():
     caminho = F.pasta_temporaria("leitura_pdf7") / "s.pdf"
     doc = fitz.open()

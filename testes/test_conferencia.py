@@ -149,6 +149,22 @@ def test_pdf_anexo_e_xmp_sao_vigiados():
     assert conferir(caminho, PESSOA) == [F.PESSOA_1]
 
 
+def test_pdf_com_nome_que_vira_a_pagina_com_rodape_no_meio_e_pego():
+    """Redação desligada de propósito (o arquivo conferido é o original): o nome partido entre duas páginas, com
+    o rodapé no meio na ordem do fluxo, tem de ser achado com a mesma ordem de leitura do leitor."""
+    caminho = F.pasta_temporaria("conf_virada") / "v.pdf"
+    doc = fitz.open()
+    f = dict(fontname="helv", fontsize=11)
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((72, 700), "Titular: Zuleiva Maria", **f)
+    p1.insert_text((72, 820), "Página 1 de 2", fontname="helv", fontsize=9)
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((72, 100), "Fernandes, inscrita no CPF 111.444.777-35.", **f)
+    doc.save(str(caminho))
+    achados = conferir(caminho, _mapa(("pessoa", "Zuleiva Maria Fernandes")))
+    assert achados == ["Zuleiva Maria Fernandes"], achados
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

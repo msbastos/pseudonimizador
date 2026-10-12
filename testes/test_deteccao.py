@@ -129,6 +129,81 @@ def test_inicial_do_meio_nao_corta_o_nome():
     assert "João C. Souza" in a["pessoa"], a
 
 
+def test_nome_nao_continua_no_endereco_da_linha_seguinte():
+    for texto in ("Locador: Maria Souza\nRua das Flores, 100, Centro",
+                  "Locador: Maria Souza\nPraça da Sé, 100",
+                  "À Sra. Maria Souza\nRua Marechal Deodoro, 1500, apto 21",
+                  "Locador: Maria Souza\nVila Nova, 100", "Locador: Maria Souza\nJardim das Rosas, 100"):
+        oc = detectar(texto)
+        assert not any("\n" in o.valor for o in oc if o.categoria == "pessoa"), (texto, oc)
+        if "Rua" in texto:
+            assert any(o.categoria == "endereco" for o in oc), (texto, oc)
+
+
+def test_nome_que_cruza_o_endereco_e_cortado_antes_da_quebra():
+    # "Alameda" nao e' logradouro reconhecido como palavra de lugar aqui; o corte vem do identificador
+    oc = detectar("Locador: Maria Souza\nAvenida Getúlio Vargas, 1500")
+    assert any(o.categoria == "pessoa" and o.valor == "Maria Souza" for o in oc), oc
+    assert any(o.categoria == "endereco" and "1500" in o.valor for o in oc), oc
+
+
+def test_nome_que_esbarra_em_identificador_na_linha_de_baixo_volta_antes_da_quebra():
+    texto = "Locador: Maria Souza\nsilva@exemplo.com.br"
+    oc = detectar(texto)
+    assert any(o.categoria == "pessoa" and o.valor == "Maria Souza" for o in oc), oc
+    assert any(o.categoria == "email" and o.valor == "silva@exemplo.com.br" for o in oc), oc
+
+
+def test_lista_de_nomes_um_por_linha_nao_vira_uma_pessoa():
+    a = _por_categoria("Testemunhas:\nMaria Souza\nCarlos Pereira\nAna Lima")
+    assert {"Maria Souza", "Carlos Pereira", "Ana Lima"} <= a["pessoa"], a
+
+
+def test_continuacao_depois_da_quebra_so_com_sobrenome():
+    a = _por_categoria("Titular: Zuleiva Maria\nFernandes Lima, inscrita no CPF 111.444.777-35.")
+    assert "Zuleiva Maria\nFernandes Lima" in a["pessoa"], a
+
+
+def test_espaco_antes_da_quebra_nao_impede_a_continuacao():
+    a = _por_categoria("Titular: Xandrelo Quintebor \nFernandes, inscrito no CPF 111.444.777-35.")
+    assert any(v.replace(" \n", "\n") == "Xandrelo Quintebor\nFernandes" for v in a["pessoa"]), a
+
+
+def test_sem_entre_linhas_nunca_atravessa_a_quebra():
+    for texto in ("Titular: Zuleiva Maria\nFernandes, inscrita no CPF 111.444.777-35.",
+                  "Assinado por Maria\nSouza em 2026."):
+        oc = detectar(texto, entre_linhas=False)
+        assert not any("\n" in o.valor for o in oc), oc
+
+
+def test_qualificacao_e_prenome_sozinho_atravessam_a_quebra():
+    a = _por_categoria("neste ato a Sra. Zuleiva Maria\nFernandes, brasileira, solteira.")
+    assert "Zuleiva Maria\nFernandes" in a["pessoa"], a
+    a = _por_categoria("em favor de Maria\nFernandes, inscrita no CPF 111.444.777-35.")
+    assert any("Maria\nFernandes" in v for v in a["pessoa"]), a
+
+
+def test_prenome_antes_do_nome_em_outras_formas_de_linha():
+    for texto in ("______ Zuleiva Maria Souza\nCPF: 111.444.777-35",
+                  "1. Zuleiva Maria Souza\n2. Carlos Pereira",
+                  "- Zuleiva Maria Souza\n- Carlos Pereira",
+                  "Testemunha 2 Zuleiva Maria Souza\nCPF: 111.444.777-35",
+                  "Zuleiva Maria Souza.\nOutra linha.",
+                  "Zuleiva Maria Souza - CPF 111.444.777-35",
+                  "Testemunha 1; CPF  Zuleiva Maria Souza"):
+        a = _por_categoria(texto)
+        assert "Zuleiva Maria Souza" in a["pessoa"], (texto, a)
+
+
+def test_palavra_de_papel_ou_fecho_nao_e_absorvida():
+    for texto in ("O Exequente Maria Souza.", "Prezada Maria Souza,", "Atenciosamente,\nMaria Souza",
+                  "Assinou Maria Souza\nem 2026", "Presidente Maria Souza\n", "Relatora Maria Souza\n",
+                  "Escola Maria Souza\n", "Hospital Maria Souza\n", "Vila Maria Souza\n",
+                  "Fazenda Maria Souza\n", "Edifício Maria Souza\n"):
+        a = _por_categoria(texto)
+        assert a["pessoa"] == {"Maria Souza"}, (texto, a)
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

@@ -52,7 +52,7 @@ class Revisao:
         self.documento = documento
         self.itens: list[Item] = []
         por_chave: dict[tuple[str, str], Item] = {}
-        for o in detectar(documento.texto):
+        for o in detectar(documento.texto, entre_linhas=str(documento.tipo).startswith("pdf")):
             novo = Item(o.categoria, o.valor)
             item = por_chave.setdefault(novo.chave, novo)
             if item is novo:
