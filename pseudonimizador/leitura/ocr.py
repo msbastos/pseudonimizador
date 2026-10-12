@@ -7,6 +7,9 @@ from functools import lru_cache
 
 import fitz
 import numpy as np
+import threading
+
+_TRAVA = threading.Lock()   # o RapidOCR não é thread-safe: uma leitura por vez
 
 
 @lru_cache(maxsize=1)
@@ -18,7 +21,8 @@ def _motor():
 def ocr_pagina(pagina, dpi: int = 200) -> list[tuple[str, "fitz.Rect"]]:
     pix = pagina.get_pixmap(dpi=dpi, colorspace=fitz.csRGB, alpha=False)
     imagem = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
-    resultado = _motor()(imagem)
+    with _TRAVA:
+        resultado = _motor()(imagem)
     if resultado is None or resultado.boxes is None:
         return []
     escala = 72 / dpi
@@ -38,7 +42,8 @@ def ocr_pixmap(pix, margem: int = 16) -> list[str]:
     exemplo), com uma margem branca em volta para o detector achar as linhas."""
     imagem = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
     imagem = np.pad(imagem, ((margem, margem), (margem, margem), (0, 0)), constant_values=255)
-    resultado = _motor()(imagem)
+    with _TRAVA:
+        resultado = _motor()(imagem)
     if resultado is None or resultado.txts is None:
         return []
     return [str(t) for t in resultado.txts]
