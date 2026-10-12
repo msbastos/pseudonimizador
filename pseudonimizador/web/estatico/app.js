@@ -84,6 +84,7 @@
   async function enviar(arquivos) {
     for (const arq of arquivos) {
       if (!/\.(docx|pdf)$/i.test(arq.name)) { mensagem('Só arquivos .docx ou .pdf: ' + arq.name, true); continue; }
+      if (arq.name.length > 150) { mensagem('Nome de arquivo longo demais (máximo 150 caracteres): ' + arq.name, true); continue; }
       if (arq.size > LIMITE) { mensagem('Arquivo maior que 100 MB: ' + arq.name, true); continue; }
       try {
         await api('POST', '/api/documentos', arq, { 'X-Nome-Arquivo': encodeURIComponent(arq.name) });
@@ -361,6 +362,7 @@
         pasta_base: $('cfg-base').value, pasta_saida: $('cfg-saida').value, pasta_mapas: $('cfg-mapas').value,
         formato: $('cfg-formato').value, tipo: $('cfg-tipo').value, modo: $('cfg-modo').value });
       $('pasta-entrada').textContent = config.pastas.entrada;
+      $('aviso-pastas').hidden = true;       // salvar exige criar as pastas: elas existem agora
       mensagem('Configuração salva.');
     } catch (e) { mensagem(e.message, true); }
   });
@@ -406,6 +408,12 @@
   }
   const relogio = window.setInterval(() => { if (TOKEN && !$('tela-documentos').hidden) atualizarLista(); }, 2000);
   if (!TOKEN) mensagem('Abra o Pseudonimizador pelo atalho: sem o endereço de sessão a janela não funciona.', true);
-  api('GET', '/api/estado').then((e) => { $('versao').textContent = e.versao; }).catch(() => {});
+  function aplicarEstado(e) {
+    $('versao').textContent = e.versao;
+    $('aviso-pastas').hidden = e.pastas_disponiveis !== false;
+  }
+  api('GET', '/api/estado').then(aplicarEstado).catch(() => {});
+  // batimento: mantém a sessão viva em qualquer tela (a inatividade conta pedidos à API)
+  window.setInterval(() => { if (TOKEN) api('GET', '/api/estado').then(aplicarEstado).catch(() => {}); }, 60000);
   carregarConfig().then(() => mostrar('documentos'));
 })();

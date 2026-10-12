@@ -60,6 +60,34 @@ def test_config_falha_ao_gravar_responde_409_e_nada_aplica():
         assert not (s.pasta / "estado" / "config.json").exists()
 
 
+def test_pastas_inacessiveis_na_abertura_o_app_sobe_e_avisa():
+    """Disco da pasta base ausente: preparar_pastas falha na abertura; o app
+    sobe, /api/estado avisa, gerar/restaurar dão 409 e salvar uma pasta boa conserta."""
+    import pseudonimizador.web.servidor as srv
+    original = srv.preparar_pastas
+    chamadas = []
+
+    def falha_na_abertura(cfg):
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            raise FileNotFoundError("disco ausente")
+        return original(cfg)
+    srv.preparar_pastas = falha_na_abertura
+    try:
+        with ServidorDeTeste("web_cfg_ausente") as s:
+            status, e = s.get("/api/estado")
+            assert status == 200 and e["pastas_disponiveis"] is False
+            assert "FileNotFoundError" in s.log_texto() and "disco ausente" not in s.log_texto()
+            assert s.post("/api/documentos/" + "a" * 16 + "/gerar", {})[1]["erro"] in ("pastas", "documento")
+            nova = dict(s.get("/api/config")[1])
+            nova["pasta_base"] = str(s.pasta / "BaseBoa")
+            status, r = s.post("/api/config", nova)
+            assert status == 200, r
+            assert s.get("/api/estado")[1]["pastas_disponiveis"] is True
+    finally:
+        srv.preparar_pastas = original
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

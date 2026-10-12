@@ -170,6 +170,33 @@ def test_recusa_4xx_com_corpo_pendente_nao_derruba_a_conexao():
             assert s.pedir("PUT", "/api/estado", corpo, {"Content-Type": "application/json"})[0] == 405
 
 
+
+
+def test_inatividade_nao_encerra_com_revisao_pendente():
+    """Revisão em aberto (janela parada numa tela sem sondagem) não é perdida
+    pela inatividade; descartada, o encerramento por inatividade volta."""
+    from pathlib import Path
+    from pseudonimizador.web.registro import Doc
+    with ServidorDeTeste("web_srv_inat", inatividade_s=0.3, vigia_s=0.1) as s:
+        s.app.registro._docs["b" * 16] = Doc("b" * 16, "x.docx", "janela", Path("x.docx"), situacao="revisao")
+        time.sleep(1.5)
+        assert s.thread.is_alive() and not s.servidor.encerrado
+        s.app.registro._docs["b" * 16].situacao = "pronto"
+        s.thread.join(5)
+        assert not s.thread.is_alive() and s.servidor.encerrado
+    assert "inatividade" in s.log_texto()
+
+
+def test_encerrar_pedido_pela_janela_ignora_a_revisao():
+    from pathlib import Path
+    from pseudonimizador.web.registro import Doc
+    with ServidorDeTeste("web_srv_enc", vigia_s=0.1) as s:
+        s.app.registro._docs["c" * 16] = Doc("c" * 16, "x.docx", "janela", Path("x.docx"), situacao="revisao")
+        assert s.post("/api/encerrar")[0] == 200
+        s.thread.join(5)
+        assert not s.thread.is_alive()
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

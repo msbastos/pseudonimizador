@@ -72,6 +72,14 @@ def test_servidor_entrega_a_pagina():
         assert s.get("/estatico/app.css", token=False)[0] == 200
 
 
+def test_app_js_tem_batimento_e_aviso_de_pastas_e_checa_nome_longo():
+    js, html = _ler("app.js"), _ler("index.html")
+    assert re.search(r"setInterval\(.{0,200}api\('GET', '/api/estado'\).{0,120}60000\)", js, re.S), "batimento de 60 s"
+    assert "pastas_disponiveis" in js and 'id="aviso-pastas"' in html
+    assert "As pastas configuradas não estão acessíveis; ajuste em Configurações." in html
+    assert re.search(r"arq\.name\.length\s*>\s*150", js)
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

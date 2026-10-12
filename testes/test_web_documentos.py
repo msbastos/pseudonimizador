@@ -134,6 +134,25 @@ def test_log_nunca_leva_nome_de_arquivo_nem_valores():
         assert proibido not in log, proibido
 
 
+def test_nome_longo_e_recusado_antes_de_ler_o_corpo():
+    """Nome com mais de 150 caracteres: 400 "nome" já pelo cabeçalho, mesmo com
+    corpo anunciado grande (que nem chega a ser lido)."""
+    import http.client
+    from urllib.parse import quote
+    with ServidorDeTeste("web_nome_longo") as s:
+        nome = quote("a" * 151 + ".docx")
+        con = http.client.HTTPConnection("127.0.0.1", s.porta, timeout=20)
+        con.putrequest("POST", "/api/documentos")
+        for k, v in (("X-Token", s.token), ("X-Nome-Arquivo", nome), ("Content-Length", str(50 * 1024 * 1024)),
+                     ("Content-Type", "application/octet-stream")):
+            con.putheader(k, v)
+        con.endheaders()
+        r = con.getresponse()
+        corpo = r.read()
+        con.close()
+        assert r.status == 400 and b'"nome"' in corpo, (r.status, corpo)
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

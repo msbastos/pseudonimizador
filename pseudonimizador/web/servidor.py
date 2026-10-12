@@ -106,7 +106,12 @@ class Aplicacao:
         self.pasta_estado.mkdir(parents=True, exist_ok=True)
         self.log = abrir_log(self.pasta_estado)
         self.config = config or carregar(self.pasta_estado)
-        preparar_pastas(self.config)
+        self.pastas_disponiveis = True
+        try:
+            preparar_pastas(self.config)
+        except OSError as e:               # pasta base num disco ausente: o app abre e a janela avisa
+            self.pastas_disponiveis = False
+            self.log.error("pastas configuradas inacessíveis (%s)", type(e).__name__)
         extras = {k: v for k, v in (("ler", ler), ("gerar", gerar)) if v is not None}
         self.registro = Registro(self.pasta_estado / "tmp", self.log, **extras)
         self.segredo = secrets.token_urlsafe(32)        # 256 bits: só outro processo local o lê (instancia.json)
@@ -149,13 +154,20 @@ class Aplicacao:
         return not self.registro.ocupado()
 
     def deve_encerrar(self) -> bool:
-        return self.ocioso() and (self.encerrar_pedido or time.monotonic() - self._ultimo > self.inatividade_s)
+        """Pedido explícito (menu Encerrar): quando ocioso. Inatividade: só se
+        também não houver trabalho a perder (revisão ou erro em aberto)."""
+        if not self.ocioso():
+            return False
+        if self.encerrar_pedido:
+            return True
+        return time.monotonic() - self._ultimo > self.inatividade_s and not self.registro.trabalho_a_perder()
 
     def pedir_encerramento(self) -> None:
         self.encerrar_pedido = True
 
     def aplicar_config(self, nova: Config) -> None:
         self.config = nova
+        self.pastas_disponiveis = True       # só chega aqui depois de preparar_pastas(nova) ter dado certo
         self.vigia.trocar(nova.entrada, nova.processados)
 
     def encerrar(self) -> None:
@@ -338,7 +350,8 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def _api(self, metodo: str, caminho: str) -> None:
         if (metodo, caminho) == ("GET", "/api/estado"):
-            self._json(200, {"versao": VERSAO, "ocupado": self.app.registro.ocupado(), "pastas": self.app.config.pastas()})
+            self._json(200, {"versao": VERSAO, "ocupado": self.app.registro.ocupado(), "pastas": self.app.config.pastas(),
+                             "pastas_disponiveis": self.app.pastas_disponiveis})
             return
         if (metodo, caminho) == ("POST", "/api/encerrar"):
             self.app.pedir_encerramento()
@@ -365,6 +378,10 @@ class Manipulador(BaseHTTPRequestHandler):
                     raise ErroDaApi(400, "nome", "falta o cabeçalho X-Nome-Arquivo")
                 if Path(nome.replace("\\", "/").rstrip(" .")).suffix.lower() not in (".docx", ".pdf"):
                     raise ErroDaApi(415, "formato", "só arquivos .docx ou .pdf")
+                try:
+                    validar_nome_upload(nome, (".docx", ".pdf"))    # antes de ler o corpo: nome ruim não custa um upload
+                except ValueError as e:
+                    raise ErroDaApi(400, "nome", str(e)) from None
                 tamanho, pedacos = self._corpo_bruto(LIMITE_ARQUIVO)
                 if tamanho == 0:
                     raise ErroDaApi(400, "corpo", "arquivo vazio")
@@ -413,9 +430,14 @@ class Manipulador(BaseHTTPRequestHandler):
         except RuntimeError as e:
             raise ErroDaApi(409, "situacao", str(e)) from None
 
+    def _exigir_pastas(self) -> None:
+        if not self.app.pastas_disponiveis:
+            raise ErroDaApi(409, "pastas", "As pastas configuradas não estão acessíveis; ajuste em Configurações.")
+
     def _acao_de_geracao(self, id_: str, acao: str, corpo: dict) -> bool:
         reg, cfg = self.app.registro, self.app.config
         if acao == "gerar":
+            self._exigir_pastas()
             formato = str(corpo.get("formato") or cfg.formato)
             tipo = str(corpo.get("tipo") or cfg.tipo)
             modo = str(corpo.get("modo") or cfg.modo)
@@ -539,7 +561,10 @@ class Manipulador(BaseHTTPRequestHandler):
                     mapa = self._mapa_valido(achado) if achado else None
                 if mapa is None:
                     raise ErroDaApi(409, "mapa", "Mapa não encontrado para este arquivo; escolha um da lista.")
-                cfg.saida.mkdir(parents=True, exist_ok=True)
+                try:
+                    cfg.saida.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    raise ErroDaApi(409, "pastas", "As pastas configuradas não estão acessíveis; ajuste em Configurações.") from None
                 destino = _destino(cfg.saida, f"{origem.stem} - restaurado", ".docx")
                 try:
                     n = restaurar_docx(origem, destino, mapa)
