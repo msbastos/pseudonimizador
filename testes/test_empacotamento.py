@@ -188,7 +188,7 @@ def test_pip_instala_do_lock_com_hashes_sem_dependencias():
     args = construir.argumentos_pip(Path("requirements.lock"), Path("build/app/python/Lib/site-packages"))
     assert args[:4] == [sys.executable, "-m", "pip", "install"]
     for flag in ("--no-deps", "--require-hashes", "--only-binary=:all:", "--python-version", "3.14", "--platform",
-                 "win_amd64", "--implementation", "cp", "--abi", "cp314", "--target"):
+                 "win_amd64", "--implementation", "cp", "--abi", "cp314", "--target", "--no-compile"):
         assert flag in args, flag
     assert args[args.index("-r") + 1] == "requirements.lock"
 
@@ -369,6 +369,93 @@ def _montar_falso(tmp: Path, **kw):
     return construir.montar(raiz, tmp / "build", executar=lambda *a, **k: 0, fumaca=False, **kw)
 
 
+def _montar_com_pip_que_suja(tmp: Path, **kw) -> Path:
+    """Monta com um pip falso que deixa o que o pip de verdade deixa: .pyc e lançadores em bin/."""
+    raiz = _repo_falso(tmp)
+    crt = _crt_falso(tmp / "crt")
+
+    def executar(args, **k):
+        if "pip" in args:
+            alvo = Path(args[args.index("--target") + 1])
+            (alvo / "pacote" / "__pycache__").mkdir(parents=True, exist_ok=True)
+            (alvo / "pacote" / "__pycache__" / "m.cpython-314.pyc").write_bytes(b"pyc")
+            (alvo / "bin").mkdir(parents=True, exist_ok=True)
+            (alvo / "bin" / "f2py.exe").write_bytes(b"MZ")
+        return 0
+    return construir.montar(raiz, tmp / "build", executar=executar, crt=crt, fumaca=False,
+                            baixar=lambda url, destino, sha: (destino.write_bytes(_zip_python_falso()), destino)[1], **kw)
+
+
+def test_montagem_tira_os_lancadores_e_todo_pycache():
+    with tempfile.TemporaryDirectory() as d:
+        app = _montar_com_pip_que_suja(Path(d))
+        assert not (app / "python" / "Lib" / "site-packages" / "bin").exists()
+        assert not list(app.rglob("__pycache__"))
+        assert (app / "python" / "Lib" / "site-packages" / "pacote").is_dir()   # só o lixo sai
+
+
+def test_limpar_app_tira_o_pycache_que_a_fumaca_recria():
+    with tempfile.TemporaryDirectory() as d:
+        app = Path(d) / "app"
+        (app / "pseudonimizador" / "__pycache__").mkdir(parents=True)
+        (app / "pseudonimizador" / "__pycache__" / "x.pyc").write_bytes(b"x")
+        (app / "pseudonimizador" / "a.py").write_text("x", encoding="utf-8")
+        construir.limpar_app(app)
+        assert not (app / "pseudonimizador" / "__pycache__").exists() and (app / "pseudonimizador" / "a.py").is_file()
+
+
+def test_guarda_acusa_pasta_pessoal_e_usuario_em_utf8_e_utf16_sem_mostrar_o_conteudo():
+    home = "C:" + chr(92) + "Users" + chr(92) + "Fulano" + "Teste"
+    usuario = "fulano" + "teste"
+    with tempfile.TemporaryDirectory() as d:
+        app = Path(d)
+        (app / "limpo.txt").write_text("nada aqui", encoding="utf-8")
+        (app / "curto.txt").write_text("ab", encoding="utf-8")
+        (app / "a").mkdir()
+        (app / "a" / "utf8.pyc").write_bytes(bytes(1) + home.upper().encode("utf-8") + bytes(1))
+        (app / "a" / "barra.txt").write_bytes(home.replace(chr(92), "/").encode("utf-8"))
+        (app / "a" / "utf16.bin").write_bytes(home.encode("utf-16-le"))
+        (app / "a" / "nome.txt").write_bytes(b"dono: " + usuario.encode("utf-8"))
+        achados = construir.achados_de_identidade(app, home=home, usuario=usuario)
+        assert achados == ["a/barra.txt", "a/nome.txt", "a/utf16.bin", "a/utf8.pyc"], achados
+        try:
+            construir.conferir_sem_identidade(app, home=home, usuario=usuario)
+        except SystemExit as e:
+            msg = str(e)
+            assert "a/utf8.pyc" in msg and usuario not in msg.lower() and "Users" not in msg, msg
+        else:
+            raise AssertionError("deveria recusar")
+        # usuário com menos de 3 caracteres não vira agulha (acusaria qualquer coisa)
+        assert construir.achados_de_identidade(app / "a", home="Z:" + chr(92) + "naoexiste", usuario="ab") == []
+
+
+def test_guarda_lista_so_os_10_primeiros():
+    with tempfile.TemporaryDirectory() as d:
+        app = Path(d)
+        for i in range(15):
+            (app / f"f{i:02d}.txt").write_text("segredo-do-dono", encoding="utf-8")
+        try:
+            construir.conferir_sem_identidade(app, home="Z:" + chr(92) + "x", usuario="segredo-do-dono")
+        except SystemExit as e:
+            assert str(e).count(".txt") == 10 and "15 arquivo" in str(e) and "f09.txt" in str(e) and "f10.txt" not in str(e)
+        else:
+            raise AssertionError("deveria recusar")
+
+
+def test_montagem_para_se_o_app_leva_a_identidade_de_quem_monta():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        raiz = _repo_falso(tmp)
+        (raiz / "pseudonimizador" / "__init__.py").write_text(f"# {Path.home()}", encoding="utf-8")
+        try:
+            construir.montar(raiz, tmp / "build", executar=lambda *a, **k: 0, crt=_crt_falso(tmp / "crt"), fumaca=False,
+                             baixar=lambda url, destino, sha: (destino.write_bytes(_zip_python_falso()), destino)[1])
+        except SystemExit as e:
+            assert "pseudonimizador/__init__.py" in str(e), e
+        else:
+            raise AssertionError("a pasta pessoal no código deveria parar o build")
+
+
 def test_crt_explicito_vazio_ou_com_typo_e_recusado():
     with tempfile.TemporaryDirectory() as d:
         vazia = Path(d) / "crt-vazia"
@@ -533,12 +620,14 @@ def test_iss_instala_sem_administrador_so_x64_e_fecha_o_app_aberto():
     for exigido in ("PrivilegesRequired=lowest", "DefaultDirName={localappdata}\\Programs\\Pseudonimizador",
                     "DisableDirPage=yes", "DisableProgramGroupPage=yes", "ArchitecturesAllowed=x64compatible",
                     "ArchitecturesInstallIn64BitMode=x64compatible", "MinVersion=10.0.17763",
-                    f"AppMutex={abrir.NOME_MUTEX}", "CloseApplications=yes", "OutputBaseFilename=Pseudonimizador-Setup",
+                    f"AppMutex={abrir.NOME_MUTEX}", "CloseApplications=yes",
                     "SetupIconFile=pseudonimizador.ico", "Languages\\BrazilianPortuguese.isl", "AppVersion={#Versao}",
                     '#error Passe /DVersao', 'Parameters: "-X utf8 -m pseudonimizador"', 'WorkingDir: "{app}"',
                     "python\\pythonw.exe", "{userdesktop}\\Pseudonimizador", "Tasks: atalho",
                     "Flags: postinstall nowait skipifsilent"):
         assert exigido in iss, exigido
+    # o nome do Setup vem do /F do construir.py (nome_do_setup): o .iss não o fixa
+    assert "OutputBaseFilename" not in iss
     for proibido in ("{pf}", "{commonpf", "{commonappdata}", "runascurrentuser", "PrivilegesRequired=admin",
                      "C:\\Users", "DirectML", "claude", "Mistral", "agendado"):
         assert proibido not in iss, proibido

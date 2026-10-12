@@ -27,7 +27,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 NOME_SETUP = "Pseudonimizador-Setup.exe"
 RE_EMAIL = re.compile(r"\w[\w.+-]*@(?:[\w-]+\.)+[a-z]{2,}", re.I)
 RE_CAMINHO = re.compile(
-    r"(?i)(?:\b[a-z]:[\\/]+users[\\/]+|(?<![\w.:-])/[a-z]/users/|(?<![\w.:-])/home/)(?!<)([^\\/\s\"'<>|]+)")
+    r"(?i)(?:\b[a-z]:[\\/]+users[\\/]+|(?<![\w.:-])/[a-z]/users/|(?<![\w.:-])/" r"home/)(?!<)([^\\/\s\"'<>|]+)")
 RE_COMMIT = re.compile(r"^commit ([0-9a-f]{7,40})")
 RE_ARQUIVO = re.compile(r"^diff --git a/.* b/(.*)$|^diff --(?:cc|combined) (.*)$")
 DOMINIOS_PERMITIDOS = ("anthropic.com", "users.noreply.github.com", "exemplo.com.br", "example.com")
@@ -81,6 +81,8 @@ def varrer(texto: str, termos: list[str]) -> list[str]:
                 registrar("e-mail", m.group(0), mascarar_email(m.group(0)))
         for m in RE_CAMINHO.finditer(linha):
             nome = m.group(1)
+            if "***" in nome:   # já é máscara (o relato de uma varredura anterior), não um nome
+                continue
             registrar("caminho", m.group(0), m.group(0)[:len(m.group(0)) - len(nome)] + nome[:1] + "***")
         baixa = linha.casefold()
         for cf, original in termos_cf:

@@ -121,6 +121,7 @@ def test_validar_recusa_pastas_dentro_da_instalacao_ou_do_estado():
     import pseudonimizador
     raiz = Path(pseudonimizador.__file__).resolve().parents[1]
     original = estado._raiz_da_instalacao
+    anterior = os.environ.get("PSEUDONIMIZADOR_ESTADO")
     estado._raiz_da_instalacao = lambda: raiz          # o clone de desenvolvimento não conta como instalação
     est = F.pasta_temporaria("estado_protegido")
     os.environ["PSEUDONIMIZADOR_ESTADO"] = str(est)
@@ -138,7 +139,11 @@ def test_validar_recusa_pastas_dentro_da_instalacao_ou_do_estado():
                 else:
                     raise AssertionError((campo, proibida))
     finally:
-        del os.environ["PSEUDONIMIZADOR_ESTADO"]
+        estado._raiz_da_instalacao = original
+        if anterior is None:
+            os.environ.pop("PSEUDONIMIZADOR_ESTADO", None)
+        else:
+            os.environ["PSEUDONIMIZADOR_ESTADO"] = anterior
 
 
 if __name__ == "__main__":

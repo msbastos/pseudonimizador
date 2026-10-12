@@ -16,11 +16,13 @@ do runtime do Visual C++ (app-local: sem vc_redist, sem administrador; nunca do
 System32 num build publicado); 5) copia o código pelo manifesto e o ícone; 6)
 fumaça: o Python embarcado, a partir de OUTRA pasta e com a rede bloqueada,
 importa tudo, lê DOCX/PDF/OCR, gera e restaura (empacotamento/fumaca.py); 7)
+limpa lançadores e __pycache__ e confere que nada leva a pasta pessoal nem o usuário; 8)
 ISCC com /DVersao e /DOrigem; escreve dist/SHA256SUMS.txt (build/ guarda o .wsb do Sandbox).
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import os
 import shutil
@@ -73,7 +75,7 @@ def conteudo_pth() -> str:
 def argumentos_pip(lock: Path, destino: Path) -> list[str]:
     return [sys.executable, "-m", "pip", "install", "--no-deps", "--require-hashes", "--only-binary=:all:",
             "--python-version", SERIE, "--platform", "win_amd64", "--implementation", "cp", "--abi", "cp314",
-            "--isolated", "--upgrade", "--target", str(destino), "-r", str(lock)]
+            "--isolated", "--upgrade", "--no-compile", "--target", str(destino), "-r", str(lock)]
 
 
 def nomes_do_crt() -> tuple[str, ...]:
@@ -149,6 +151,54 @@ def _executar_padrao(args, **kw) -> int:
     return subprocess.run(args, check=False, **kw).returncode
 
 
+def limpar_app(app: Path) -> None:
+    """Tira de build/app o que carrega o caminho da máquina de build: os lançadores de Lib/site-packages/bin (a
+    primeira linha deles aponta para o venv de desenvolvimento) e todo __pycache__ (co_filename dos .pyc)."""
+    app = Path(app)
+    shutil.rmtree(app / "python" / "Lib" / "site-packages" / "bin", ignore_errors=True)
+    for pasta in sorted((p for p in app.rglob("__pycache__") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        shutil.rmtree(pasta, ignore_errors=True)
+
+
+def _agulhas_de_identidade(home: Path | str, usuario: str) -> list[bytes]:
+    textos = []
+    h = str(home)
+    if h:
+        textos += [h, h.replace("\\", "/")]
+    if len(usuario) >= 3:
+        textos.append(usuario)
+    agulhas = []
+    for t in textos:
+        for codificada in (t.lower().encode("utf-8"), t.lower().encode("utf-16-le")):
+            if codificada not in agulhas:
+                agulhas.append(codificada)
+    return agulhas
+
+
+def achados_de_identidade(app: Path, *, home: Path | str | None = None, usuario: str | None = None) -> list[str]:
+    """Caminhos relativos (sem conteúdo) dos arquivos de build/app que trazem a pasta pessoal ou o nome de usuário
+    de quem monta: bytes, sem diferenciar caixa, em UTF-8 e UTF-16-LE."""
+    home = Path.home() if home is None else home
+    usuario = getpass.getuser() if usuario is None else usuario
+    agulhas = _agulhas_de_identidade(home, usuario)
+    achados = []
+    for f in sorted(Path(app).rglob("*")):
+        if not f.is_file():
+            continue
+        baixo = f.read_bytes().lower()   # lower() de bytes só mexe em ASCII, que é o que importa (UTF-16-LE: o byte alto é 0)
+        if any(a in baixo for a in agulhas):
+            achados.append(f.relative_to(app).as_posix())
+    return achados
+
+
+def conferir_sem_identidade(app: Path, *, home: Path | str | None = None, usuario: str | None = None) -> None:
+    achados = achados_de_identidade(app, home=home, usuario=usuario)
+    if achados:
+        lista = chr(10).join("  " + a for a in achados[:10])
+        raise SystemExit(f"build/app leva a pasta pessoal ou o nome de usuário de quem monta ({len(achados)} arquivo(s)); "
+                         f"os 10 primeiros:{chr(10)}{lista}")
+
+
 def montar(raiz: Path, build: Path, *, executar=_executar_padrao, baixar=_baixar_padrao, crt: Path | None = None,
            fumaca: bool = True, crt_do_sistema: bool = False) -> Path:
     from empacotamento import manifesto
@@ -203,6 +253,9 @@ def montar(raiz: Path, build: Path, *, executar=_executar_padrao, baixar=_baixar
     # 6: fumaça
     if fumaca:
         fumacar(app, executar=executar)
+    # 7: nada da máquina de build segue no instalador (a fumaça acabou de recriar __pycache__)
+    limpar_app(app)
+    conferir_sem_identidade(app)
     return app
 
 

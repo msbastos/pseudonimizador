@@ -40,8 +40,9 @@ def test_varrer_acha_email_caminho_e_termos_mascarados_sem_repetir():
 
 def test_varrer_caminhos_de_outros_formatos():
     achados = V.varrer("+/home/" + "joao/x e /c/Users/" + "maria/y\n", [])
-    assert any(a.endswith("caminho /home/j***") for a in achados), achados
-    assert any(a.endswith("caminho /c/Users/m***") for a in achados), achados
+    assert any(a.endswith("caminho /" + "home/j***") for a in achados), achados
+    assert any(a.endswith("caminho /c/" + "Users/m***") for a in achados), achados
+    assert V.varrer("+/home/" + "j***/x e /c/Users/" + "m***/y" + chr(10), []) == []   # máscara não é nome
 
 
 def test_termos_ausentes_usa_so_os_padroes_embutidos():

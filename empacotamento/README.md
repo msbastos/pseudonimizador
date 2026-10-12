@@ -38,8 +38,11 @@ ligada, **rede desligada**, e abre o Setup ao entrar no Sandbox) sai em
 ### Trocar a versão do Python embarcável
 
 Em `python-embarcavel.toml`, troque os três campos juntos (`versao`, `url`,
-`sha256` publicado em python.org para "Windows embeddable package (64-bit)").
-O `construir.py` recusa o zip se o hash não bater. Se a série (3.14) mudar,
+`sha256` do "Windows embeddable package (64-bit)"). Quando python.org não
+publica o SHA-256 desse zip, calcule-o do próprio download por HTTPS
+(`certutil -hashfile <zip> SHA256`): é confiança no primeiro uso (TOFU), como
+registram o comentário do `.toml` e as notas da release. O `construir.py`
+recusa o zip se o hash ou o tamanho não baterem. Se a série (3.14) mudar,
 regenere o lock.
 
 ### Regenerar o `requirements.lock`

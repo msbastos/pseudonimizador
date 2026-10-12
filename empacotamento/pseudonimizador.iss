@@ -29,7 +29,6 @@ MinVersion=10.0.17763
 AppMutex=Pseudonimizador-Servidor
 CloseApplications=yes
 OutputDir=..\dist
-OutputBaseFilename=Pseudonimizador-Setup
 SetupIconFile=pseudonimizador.ico
 UninstallDisplayIcon={app}\pseudonimizador.ico
 UninstallDisplayName=Pseudonimizador
