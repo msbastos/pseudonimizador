@@ -12,7 +12,9 @@ from ..motor.lexico import SOBRENOMES, frequencia_de_sobrenome
 from ..motor.mapa import normalizar
 from ..motor.pseudonimizador import CONECTIVOS, RE_SUFIXO_PJ, _NUNCA_NOME, _prenome_provado
 
-RE_PALAVRA = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*")
+# inicial seguida de ponto ("S.", "C.") conta como palavra do nome, se vem outra palavra depois
+RE_INICIAL = re.compile(r"[^\W\d_]\.")
+RE_PALAVRA = re.compile(r"[^\W\d_]\.(?=[ 	 ][^\W\d_])|[^\W\d_]+(?:['’\-][^\W\d_]+)*")
 RE_SO_ESPACO = re.compile(r"[ \t\u00a0]{1,3}")
 
 RE_ANCORA = re.compile(
@@ -25,7 +27,13 @@ RE_ANCORA = re.compile(
 RE_QUALIFICACAO = re.compile(
     r"(?i),\s*(?:brasileir[oa]|estrangeir[oa]|nacionalidade|portador[a]?|inscrit[oa]|CPF|CNPJ|RG|"
     r"estado\s+civil|solteir[oa]|casad[oa]|divorciad[oa]|vi[úu]v[oa]|maior|menor)\b")
-RE_SUFIXO = re.compile(r"(?<!\w)(?:ltda\.?|s\.\s?a\.?|s/a|eireli|epp|ME|SLU)(?!\w)", re.I)
+# ME/EPP/SLU só valem como sufixo pela posição: antes de pontuação, fim de linha ou CNPJ/"inscrita"
+# (senão o pronome "me" viraria sufixo)
+RE_SUFIXO = re.compile(
+    r"(?<!\w)(?:ltda\.?|s\.\s?a\.?|s/a|eireli"
+    r"|(?:epp|ME|SLU)(?=\s*(?:[,;.:)\n]|$)|\s+(?:CNPJ|inscrit)))(?!\w)", re.I)
+RE_SUFIXO_ADIANTE = re.compile(r"\s*" + RE_SUFIXO.pattern, re.I)
+_LIGACAO = CONECTIVOS - {"e"}  # dentro de um nome só "da/de/do/das/dos" continuam; "e" encerra
 _SUFIXO_EXIGE_DUAS = {"me", "epp", "slu"}
 
 _PARADAS = {"brasileiro", "brasileira", "estrangeiro", "estrangeira", "portador", "portadora",
@@ -65,7 +73,7 @@ def _ler_adiante(s: str, pos: int) -> tuple[int, int] | None:
         return None
     ini, fim = palavras[0].start(), palavras[-1].end()
     # sufixo societário logo depois ("... Tecidos Ltda.") faz parte do nome
-    suf = re.compile(r"\s*" + RE_SUFIXO.pattern, re.I).match(s, fim)
+    suf = RE_SUFIXO_ADIANTE.match(s, fim)
     if suf:
         fim = suf.end()
     return (ini, fim) if _significativas(s[ini:fim]) >= 2 else None
@@ -134,7 +142,7 @@ def _por_lexico(s: str) -> list[tuple[int, int, str]]:
         while j + 1 < len(palavras) and RE_SO_ESPACO.fullmatch(s[palavras[j].end():palavras[j + 1].start()]):
             w = palavras[j + 1].group()
             n = normalizar(w)
-            if n in CONECTIVOS:
+            if n in _LIGACAO or RE_INICIAL.fullmatch(w):
                 j += 1
                 continue
             if _sobrenome(n) or _prenome_provado(w):

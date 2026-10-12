@@ -30,10 +30,12 @@ def _identificadores(limpo: str) -> list[tuple[int, int, str]]:
 
 def detectar(texto: str) -> list[Ocorrencia]:
     limpo, ini, fim = limpar_com_indices(texto)
-    nomes = pessoas_e_empresas(limpo)
-    # nomes primeiro (como no motor): identificador que cruza um nome cede
-    candidatos = nomes + [i for i in _identificadores(limpo)
-                          if all(i[1] <= n[0] or i[0] >= n[1] for n in nomes)]
+    ids = _identificadores(limpo)
+    # nome inteiro dentro de um identificador ("Rua Joaquim Nabuco, 123") é parte dele e cai;
+    # nome que cruza só parte do identificador vence (como no motor) e o identificador cede
+    nomes = [n for n in pessoas_e_empresas(limpo)
+             if not any(i[0] <= n[0] and n[1] <= i[1] for i in ids)]
+    candidatos = nomes + [i for i in ids if all(i[1] <= n[0] or i[0] >= n[1] for n in nomes)]
     candidatos.sort(key=lambda a: (a[0], -(a[1] - a[0])))
     saida: list[Ocorrencia] = []
     for a, b, cat in candidatos:

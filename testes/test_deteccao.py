@@ -48,6 +48,34 @@ def test_ocorrencias_ordenadas_sem_sobreposicao():
     assert all(TEXTO[o.ini:o.fim] == o.valor for o in oc)
 
 
+def test_endereco_com_nome_de_pessoa_na_rua_fica_inteiro():
+    a = _por_categoria("residente na Rua Joaquim Nabuco, 123, apto 45, CEP 90000-000.")
+    assert any("Joaquim Nabuco" in v and "123" in v for v in a.get("endereco", ())), a
+    assert "Joaquim Nabuco" not in a.get("pessoa", ()), a
+    a = _por_categoria("Avenida Getúlio Vargas, 1500")
+    assert any("Getúlio Vargas" in v and "1500" in v for v in a.get("endereco", ())), a
+    assert "Getúlio Vargas" not in a.get("pessoa", ()), a
+
+
+def test_pronome_me_nao_vira_sufixo_de_empresa():
+    a = _por_categoria("Ficou acertado que Maria Pereira me pagará o valor.")
+    assert "Maria Pereira" in a["pessoa"] and not a.get("empresa"), a
+    a = _por_categoria("Padaria Bom Pão ME, CNPJ 11.222.333/0001-81")
+    assert "Padaria Bom Pão ME" in a["empresa"], a
+
+
+def test_duas_pessoas_ligadas_por_e_sao_dois_nomes():
+    a = _por_categoria("Assinaram João Silva e Maria Souza o presente.")
+    assert {"João Silva", "Maria Souza"} <= a["pessoa"], a
+
+
+def test_inicial_do_meio_nao_corta_o_nome():
+    a = _por_categoria("CONTRATANTE: Maria da S. Pereira, brasileira.")
+    assert "Maria da S. Pereira" in a["pessoa"], a
+    a = _por_categoria("assinado por João C. Souza.")
+    assert "João C. Souza" in a["pessoa"], a
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())
