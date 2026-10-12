@@ -29,7 +29,7 @@ from docx.opc.exceptions import PackageNotFoundError
 from lxml import etree
 
 from .. import VERSAO
-from ..estado import Config, abrir_log, carregar, preparar_pastas
+from ..estado import Config, abrir_log, carregar, gravar, preparar_pastas, validar
 from ..restaurar import TokenOrfao, id_do_mapa, restaurar_docx, restaurar_texto
 from ..saida import _destino, mapas
 from .registro import DocumentoInexistente, Registro, validar_nome_upload
@@ -54,6 +54,8 @@ ROTAS: list[tuple[str, str]] = [
     ("POST", rf"/api/documentos/{RE_ID}/acrescentar"),
     ("POST", rf"/api/documentos/{RE_ID}/gerar"),
     ("POST", rf"/api/documentos/{RE_ID}/abrir"),
+    ("GET", r"/api/config"),
+    ("POST", r"/api/config"),
     ("GET", r"/api/mapas"),
     ("POST", r"/api/restaurar/docx"),
     ("POST", r"/api/restaurar/texto"),
@@ -293,8 +295,8 @@ class Manipulador(BaseHTTPRequestHandler):
         self._enviar(200, (PASTA_ESTATICO / nome).read_bytes(), ESTATICOS[nome])
 
     def _tratadores(self) -> tuple:
-        """Os blocos da API (a Task 7 acrescenta o da configuração)."""
-        return (self._api_documentos, self._api_restaurar)
+        """Os blocos da API."""
+        return (self._api_documentos, self._api_restaurar, self._api_config)
 
     def _api(self, metodo: str, caminho: str) -> None:
         if (metodo, caminho) == ("GET", "/api/estado"):
@@ -397,6 +399,33 @@ class Manipulador(BaseHTTPRequestHandler):
                                                 "(foi apagado ou movido depois da geração)") from None
             self.app.log.info("documento %s: abrir %s", id_, alvo)
             self._json(200, {"ok": True})
+            return True
+        return False
+
+    # --- configuração --------------------------------------------------------
+    def _config_publica(self) -> dict:
+        c = self.app.config
+        return {**asdict(c), "pastas": c.pastas()}
+
+    def _api_config(self, metodo: str, caminho: str) -> bool:
+        if caminho != "/api/config":
+            return False
+        if metodo == "GET":
+            self._json(200, self._config_publica())
+            return True
+        if metodo == "POST":
+            try:
+                nova = validar(self._corpo_json())
+            except ValueError as e:
+                raise ErroDaApi(400, "config", str(e)) from None
+            try:
+                preparar_pastas(nova)
+            except (OSError, ValueError) as e:
+                raise ErroDaApi(400, "config", f"não foi possível criar as pastas: {getattr(e, 'strerror', None) or e}") from None
+            gravar(self.app.pasta_estado, nova)
+            self.app.aplicar_config(nova)
+            self.app.log.info("configuração gravada (%s, %s, %s)", nova.formato, nova.tipo, nova.modo)
+            self._json(200, self._config_publica())
             return True
         return False
 

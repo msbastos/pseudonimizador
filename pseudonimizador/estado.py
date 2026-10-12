@@ -86,28 +86,35 @@ def validar(dados: dict) -> Config:
         valor = getattr(cfg, campo)
         if valor and not Path(valor).is_absolute():
             raise ValueError(f"{rotulo}: informe o caminho completo")
-    s, m, e = cfg.saida.resolve(), cfg.mapas.resolve(), cfg.entrada.resolve()
+    try:
+        s, m, e = cfg.saida.resolve(), cfg.mapas.resolve(), cfg.entrada.resolve()
+    except (OSError, ValueError, RuntimeError) as erro:
+        raise ValueError(f"caminho inválido: {erro.strerror or erro}") from None
+    # A pasta vigiada (Entrada) não pode ver saídas e mapas como se fossem entradas.
+    if any(x == e or x in e.parents or e in x.parents for x in (s, m)):
+        raise ValueError("a saída e os mapas não podem ser a pasta Entrada nem ficar dentro dela (ou vice-versa)")
     if s == m or s in m.parents or m in s.parents:
         raise ValueError("a pasta dos mapas não pode ser a da saída nem ficar dentro dela (ou vice-versa)")
-    if e in (s, m):
-        raise ValueError("a saída e os mapas não podem ser a pasta Entrada")
     return cfg
 
 
 def carregar(pasta_estado: Path) -> Config:
-    """A config gravada; sem arquivo, a padrão. Arquivo ilegível vira
-    config.json.bak (nada bloqueia a abertura) e volta-se à padrão."""
+    """A config gravada; sem arquivo, a padrão. Arquivo corrompido vira
+    config.json.bak (nada bloqueia a abertura) e volta-se à padrão; erro de
+    leitura (OSError) só volta à padrão, sem renomear."""
     arquivo = Path(pasta_estado) / ARQUIVO_CONFIG
     padrao = Config(pasta_base=str(pasta_base_padrao()))
     if not arquivo.is_file():
         return padrao
     try:
         return validar(json.loads(arquivo.read_text(encoding="utf-8")))
-    except (ValueError, OSError):
+    except ValueError:                 # conteúdo corrompido: guarda como .bak
         try:
             os.replace(arquivo, arquivo.with_suffix(".json.bak"))
         except OSError:
             pass
+        return padrao
+    except OSError:                    # trava passageira: não descarta uma config que pode estar boa
         return padrao
 
 

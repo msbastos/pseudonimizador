@@ -51,6 +51,10 @@ def test_validar_recusa_o_que_a_tela_nao_pode_gravar():
         ({"pasta_base": base, "pasta_saida": base + "\\Mapas"}, "mapas"),
         ({"pasta_base": base, "pasta_saida": base + "\\Entrada"}, "Entrada"),
         ({"pasta_base": base, "pasta_saida": "Saida"}, "caminho completo"),
+        ({"pasta_base": base, "pasta_saida": base + "/Entrada/Fora"}, "Entrada"),
+        ({"pasta_base": base, "pasta_mapas": base + "/Entrada/M"}, "Entrada"),
+        ({"pasta_base": base + "/Entrada/Sub", "pasta_saida": base + "/Entrada"}, "Entrada"),
+        ({"pasta_base": base + "/Entrada/Sub", "pasta_mapas": base}, "Entrada"),
     ]
     for dados, trecho in casos:
         try:
@@ -66,6 +70,41 @@ def test_config_ilegivel_vira_bak_e_volta_ao_padrao():
     (pasta / "config.json").write_text("{{{", encoding="utf-8")
     assert carregar(pasta).pasta_base == str(estado.pasta_base_padrao())
     assert (pasta / "config.json.bak").is_file() and not (pasta / "config.json").exists()
+
+
+def test_validar_converte_erro_de_resolve_em_caminho_invalido():
+    base = str(Path(F.pasta_temporaria("estado_res")) / "Base")
+    original = Path.resolve
+
+    def estoura(self, *a, **k):
+        raise OSError(22, "nome reservado")
+    Path.resolve = estoura
+    try:
+        validar({"pasta_base": base})
+    except ValueError as e:
+        assert "caminho inválido" in str(e)
+    else:
+        raise AssertionError("deveria recusar")
+    finally:
+        Path.resolve = original
+
+
+def test_config_ilegivel_por_erro_de_leitura_nao_e_renomeada():
+    pasta = F.pasta_temporaria("estado_lock")
+    (pasta / "config.json").write_text("{}", encoding="utf-8")
+    original = Path.read_text
+
+    def trava(self, *a, **k):
+        if self.name == "config.json":
+            raise PermissionError("trava")
+        return original(self, *a, **k)
+    Path.read_text = trava
+    try:
+        cfg = carregar(pasta)
+    finally:
+        Path.read_text = original
+    assert cfg.pasta_base == str(estado.pasta_base_padrao())
+    assert (pasta / "config.json").is_file() and not (pasta / "config.json.bak").exists()
 
 
 def test_log_grava_na_pasta_de_estado():
