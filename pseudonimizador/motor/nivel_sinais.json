@@ -1,0 +1,43 @@
+{
+  "versao": 5,
+  "minimo_de_mencoes_do_pedido": 2,
+  "documento_medico": [
+    "atestados?( m[eé]dicos?| de sa[uú]de(?! ocupacional))?\\b(?! de (bons|antecedentes|capacidade t|sa[uú]de ocupacional|aptid))",
+    "laudos? m[eé]dicos?|laudos? pericia(l|is) m[eé]dicos?|per[ií]cias? m[eé]dicas?|relat[oó]rios? m[eé]dicos?|licen[cç]as? m[eé]dicas?",
+    "prontu[aá]rios?|receitu[aá]rios?|receitas? m[eé]dicas?",
+    "\\bexames?\\b(?![^.;\\n]{0,40}?(admissiona|demissiona|peri[oó]dic|ocupaciona|retorno ao trabalho|mudan[cç]a de fun[cç]))",
+    "\\bCAT\\b|comunica[cç][aã]o de acidente",
+    "benef[ií]cio (previdenci[aá]rio|por incapacidade)|aux[ií]lio[- ]doen[cç]a",
+    "interna[cç][aã]o|cirurgia"
+  ],
+  "pedidos": {
+    "doença ou acidente de trabalho": [
+      "doen[cç]a (ocupacional|profissional|do trabalho)|acidente d[eo] trabalho|estabilidade acident[aá]ria",
+      "nexo (causal|concausal)|incapacidade labor|pens[aã]o (mensal )?vital[ií]cia|redu[cç][aã]o da capacidade"
+    ],
+    "estabilidade da gestante": [
+      "estabilidade (provis[oó]ria )?(da )?gestante|garantia (de emprego )?(da |à )?gestante|estado grav[ií]dico"
+    ],
+    "discriminação ou assédio sexual": [
+      "dispensa discriminat[oó]ria|despedida discriminat[oó]ria|Lei (n[ºo.]* )?9\\.?029|S[uú]mula (n[ºo.]* )?443",
+      "ass[eé]dio sexual|inj[uú]ria racial|racismo|homofob|transfob|intoler[aâ]ncia religiosa|\\bHIV\\b|soropositiv"
+    ],
+    "matéria sindical": [
+      "dirigente sindical|estabilidade sindical|conduta antissindical"
+    ]
+  },
+  "menor": [
+    "\\bmenor(es)?\\b[^.\\n]{0,40}(representad|assistid)",
+    "(representad|assistid)[oa]s? (neste ato )?(por (seu|sua|seus|suas)|pel[oa]s?) (genitor|genitora|genitores|m[aã]e|pai|pais|respons[aá]ve(l|is))",
+    "menor(es)? imp[uú]bere(s)?",
+    "menor(es)? p[uú]bere(s)?",
+    "(absoluta|relativa)mente incapaz(es)?"
+  ],
+  "documento_de_menor": [
+    "certid[aã]o(es)? de nascimento|certid[oõ]es de nascimento",
+    "sal[aá]rio[- ]fam[ií]lia",
+    "caderneta de vacina",
+    "termo de guarda",
+    "declara[cç][aã]o de dependentes?"
+  ]
+}
