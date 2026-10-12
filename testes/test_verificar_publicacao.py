@@ -18,17 +18,30 @@ def test_email_permitido_so_os_dominios_de_placeholder_e_do_github():
     assert V.email_permitido("noreply@anthropic.com") and V.email_permitido("contato@exemplo.com.br")
     assert V.email_permitido("a@example.com") and V.email_permitido("x@sub.exemplo.com.br")
     assert not V.email_permitido(EMAIL_PESSOAL)
+    assert not V.email_permitido("a@" + "meuexample.com") and not V.email_permitido("a@" + "anthropic.com.evil.net")
+    assert not V.email_permitido("a@" + "exemplo.org") and not V.email_permitido("a@" + "xusers.noreply.github.com")
 
 
-def test_varrer_acha_email_caminho_e_termos_sem_repetir():
-    texto = (f"+Author: Fulano <{EMAIL_PESSOAL}>\n+caminho {CAMINHO_MAQUINA}\\x.txt\n"
+def test_varrer_acha_email_caminho_e_termos_mascarados_sem_repetir():
+    texto = ("commit abcdef1234567890\ndiff --git a/dir/arq.txt b/dir/arq.txt\n"
+             f"+Author: Fulano <{EMAIL_PESSOAL}>\n+caminho {CAMINHO_MAQUINA}\\x.txt\n"
              f"+de novo {CAMINHO_MAQUINA}\\y.txt\n+ok contato@exemplo.com.br e C:\\Users\\<usuário>\\z\n"
-             "+relato: Beltrano Qualquer\n")
+             "+relato: BELTRANO qualquer\n+/home/<usuário>/a e /c/Users/<nome>/b\n")
     achados = V.varrer(texto, ["Beltrano Qualquer", "Sicrano"])
-    assert f"e-mail: {EMAIL_PESSOAL}" in achados and f"caminho: {CAMINHO_MAQUINA}" in achados
-    assert "termo: Beltrano Qualquer" in achados and not any("Sicrano" in a for a in achados)
-    assert len(achados) == 3, achados                               # o caminho repetido conta uma vez; <usuário> não conta
+    assert any(a.endswith("e-mail a***@p***.net") for a in achados), achados
+    assert any(a.endswith("caminho " + CAMINHO_MAQUINA[:-6] + "f***") for a in achados), achados
+    assert any(a.endswith("termo B***************r") for a in achados), achados
+    assert all(a.startswith("abcdef1 dir/arq.txt: ") for a in achados), achados
+    assert len(achados) == 3, achados                               # o caminho repetido conta uma vez; placeholders não contam
+    brutos = (EMAIL_PESSOAL, "fulano", "eltrano", "icrano")
+    assert not any(b.lower() in a.lower() for a in achados for b in brutos), achados   # nunca o valor cru
     assert V.varrer("+nada aqui\n", []) == []
+
+
+def test_varrer_caminhos_de_outros_formatos():
+    achados = V.varrer("+/home/" + "joao/x e /c/Users/" + "maria/y\n", [])
+    assert any(a.endswith("caminho /home/j***") for a in achados), achados
+    assert any(a.endswith("caminho /c/Users/m***") for a in achados), achados
 
 
 def test_termos_ausentes_usa_so_os_padroes_embutidos():
@@ -37,14 +50,20 @@ def test_termos_ausentes_usa_so_os_padroes_embutidos():
         arq = Path(d) / "termos.txt"
         arq.write_text("# comentário\nBeltrano Qualquer\n\n  Sicrano  \n", encoding="utf-8")
         assert V.carregar_termos(arq) == ["Beltrano Qualquer", "Sicrano"]
-    assert V.varrer(f"+{EMAIL_PESSOAL}\n", []) == [f"e-mail: {EMAIL_PESSOAL}"]
+    assert V.varrer(f"+{EMAIL_PESSOAL}\n", []) == ["texto: e-mail a***@p***.net"]
 
 
 def test_emails_dos_commits_todos_do_github():
     ok = f"abc1234 {GITHUB} {GITHUB}\n"
     assert V.emails_fora_do_github(ok) == []
     ruim = ok + f"def5678 {EMAIL_PESSOAL} {GITHUB}\n"
-    assert V.emails_fora_do_github(ruim) == [f"def5678: {EMAIL_PESSOAL}"]
+    assert V.emails_fora_do_github(ruim) == ["def5678: a***@p***.net"]
+
+
+def test_emails_dos_commits_linha_curta_ou_saida_vazia_e_pendencia():
+    assert V.emails_fora_do_github("")
+    r = V.emails_fora_do_github(f"abc1234 {GITHUB}\n")
+    assert len(r) == 1 and r[0].startswith("abc1234:")
 
 
 def test_conferir_dist_exige_setup_e_sha256sums_batendo():
@@ -61,10 +80,29 @@ def test_conferir_dist_exige_setup_e_sha256sums_batendo():
         assert V.conferir_dist(dist) == []
 
 
+class R:
+    def __init__(self, rc, out=""):
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def _dist_ok(d):
+    dist = Path(d) / "dist"
+    dist.mkdir()
+    (dist / "Pseudonimizador-Setup.exe").write_bytes(b"MZ")
+    (dist / "SHA256SUMS.txt").write_text(f"{hashlib.sha256(b'MZ').hexdigest()}  Pseudonimizador-Setup.exe\n",
+                                         encoding="utf-8")
+    return dist
+
+
+def _executar_limpo(log="+tudo limpo\n"):
+    def executar(args, **kw):
+        if "--format=%h %ae %ce" in args:
+            return R(0, f"abc1234 {GITHUB} {GITHUB}\n")
+        return R(0, log)
+    return executar
+
+
 def test_main_com_comandos_falsos_lista_as_pendencias_e_sai_1():
-    class R:
-        def __init__(self, rc, out=""):
-            self.returncode, self.stdout, self.stderr = rc, out, ""
     with tempfile.TemporaryDirectory() as d:
         dist = Path(d) / "dist"
         dist.mkdir()
@@ -81,25 +119,49 @@ def test_main_com_comandos_falsos_lista_as_pendencias_e_sai_1():
     assert rc == 1
     assert any("executar_todos.py" in " ".join(c) for c in chamadas)
     assert any("test_sem_dados_reais.py" in " ".join(c) for c in chamadas)
-    assert any(c[:3] == ["git", "log", "--all"] for c in chamadas)
+    assert any(c[:3] == ["git", "log", "--all"] and "-m" in c for c in chamadas)
 
 
 def test_main_tudo_limpo_sai_0():
-    class R:
-        def __init__(self, rc, out=""):
-            self.returncode, self.stdout, self.stderr = rc, out, ""
     with tempfile.TemporaryDirectory() as d:
-        dist = Path(d) / "dist"
-        dist.mkdir()
-        (dist / "Pseudonimizador-Setup.exe").write_bytes(b"MZ")
-        (dist / "SHA256SUMS.txt").write_text(f"{hashlib.sha256(b'MZ').hexdigest()}  Pseudonimizador-Setup.exe\n",
-                                             encoding="utf-8")
+        dist = _dist_ok(d)
+        termos = Path(d) / "t.txt"
+        termos.write_text("Beltrano Qualquer\n", encoding="utf-8")
+        assert V.main(["--dist", str(dist), "--termos", str(termos), "--sem-suite"], executar=_executar_limpo()) == 0
 
-        def executar(args, **kw):
-            if "--format=%h %ae %ce" in args:
-                return R(0, f"abc1234 {GITHUB} {GITHUB}\n")
-            return R(0, "+tudo limpo\n")
-        assert V.main(["--dist", str(dist), "--termos", str(Path(d) / "x.txt"), "--sem-suite"], executar=executar) == 0
+
+def test_main_sem_lista_de_termos_e_pendencia_salvo_sem_termos():
+    with tempfile.TemporaryDirectory() as d:
+        dist = _dist_ok(d)
+        base = ["--dist", str(dist), "--termos", str(Path(d) / "x.txt"), "--sem-suite"]
+        assert V.main(base, executar=_executar_limpo()) == 1
+        assert V.main(base + ["--sem-termos"], executar=_executar_limpo()) == 0
+
+
+def test_main_termo_no_historico_sai_1():
+    with tempfile.TemporaryDirectory() as d:
+        dist = _dist_ok(d)
+        termos = Path(d) / "t.txt"
+        termos.write_text("Beltrano Qualquer\n", encoding="utf-8")
+        rc = V.main(["--dist", str(dist), "--termos", str(termos), "--sem-suite"],
+                    executar=_executar_limpo("+fala do BELTRANO qualquer\n"))
+    assert rc == 1
+
+
+def test_main_git_log_falho_ou_git_ausente_e_pendencia():
+    with tempfile.TemporaryDirectory() as d:
+        dist = _dist_ok(d)
+        base = ["--dist", str(dist), "--termos", str(Path(d) / "x.txt"), "--sem-suite", "--sem-termos"]
+
+        def falha(args, **kw):
+            return R(128) if args[0] == "git" else R(0)
+        assert V.main(base, executar=falha) == 1
+
+        def ausente(args, **kw):
+            if args[0] == "git":
+                raise FileNotFoundError("git")
+            return R(0)
+        assert V.main(base, executar=ausente) == 1
 
 
 if __name__ == "__main__":
