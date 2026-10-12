@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 saida_testes/
 *.tmp
+build/
+dist/
+empacotamento/_cache/
+empacotamento/termos_proibidos.txt

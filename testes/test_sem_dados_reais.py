@@ -11,8 +11,8 @@ from test_licenca import _arquivos_do_projeto
 
 RE_CAMINHO = re.compile(r"(?i)\b[a-z]:[\\/]+users[\\/]+(?!<)[^\\/\s]+")
 RE_EMAIL = re.compile(r"[\w.+-]+@([\w-]+\.)+[a-z]{2,}", re.I)
-DOMINIOS_PERMITIDOS = ("exemplo.com.br", "example.com", "anthropic.com")
-BINARIOS = (".json", ".png", ".jpg", ".pdf", ".docx", ".onnx")
+DOMINIOS_PERMITIDOS = ("exemplo.com.br", "example.com", "anthropic.com", "users.noreply.github.com")
+BINARIOS = (".json", ".png", ".jpg", ".pdf", ".docx", ".onnx", ".ico", ".whl", ".zip", ".exe")
 
 
 def _usuarios() -> set[str]:
