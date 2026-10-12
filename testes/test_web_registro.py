@@ -171,6 +171,103 @@ def test_ocr_serializado_pela_trava():
         ocr._motor = original
 
 
+def test_descartado_cuja_leitura_falha_nao_deixa_tmp():
+    pasta = F.pasta_temporaria("registro_descartado_falha")
+    comecou, solta = threading.Event(), threading.Event()
+
+    def ler_que_falha(caminho):
+        comecou.set()
+        solta.wait(10)
+        raise OSError("arquivo preso")
+    reg = Registro(pasta / "tmp", abrir_log(pasta), ler=ler_que_falha)
+    doc = reg.registrar_upload("c.docx", [F.contrato_docx(pasta / "c.docx").read_bytes()])
+    assert comecou.wait(10)
+    reg.descartar(doc.id)
+    solta.set()
+    _esperar(lambda: not reg.fila.ocupada())
+    assert not (pasta / "tmp" / doc.id).exists()
+    assert reg.encerrar(timeout=5)
+
+
+def test_tmp_de_execucao_anterior_e_limpo_na_criacao():
+    pasta = F.pasta_temporaria("registro_tmp_velho")
+    velho = pasta / "tmp" / "abc123"
+    velho.mkdir(parents=True)
+    (velho / "x.docx").write_bytes(b"resto")
+    reg = Registro(pasta / "tmp", abrir_log(pasta))
+    assert not velho.exists()
+    assert reg.encerrar(timeout=5)
+
+
+def test_geracao_duas_vezes_recusa_a_segunda_e_nao_edita_gerando():
+    pasta = F.pasta_temporaria("registro_gerar_duas")
+    chamadas, solta = [], threading.Event()
+
+    def gerar_lento(*a, **k):
+        chamadas.append(1)
+        solta.wait(10)
+        raise ValueError("recusado de propósito")
+    reg = Registro(pasta / "tmp", abrir_log(pasta), gerar=gerar_lento)
+    doc = reg.registrar_upload("c.docx", [F.contrato_docx(pasta / "c.docx").read_bytes()])
+    _esperar(lambda: doc.situacao == "revisao")
+    args = dict(formato="layout", tipo=None, modo="reversivel", pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    reg.pedir_geracao(doc.id, **args)
+    for chamada in (lambda: reg.pedir_geracao(doc.id, **args),
+                    lambda: reg.decidir(doc.id, "email", F.EMAIL, False),
+                    lambda: reg.acrescentar(doc.id, "Porto Alegre", "outro")):
+        try:
+            chamada()
+        except (ValueError, RuntimeError):
+            pass
+        else:
+            raise AssertionError("deveria recusar enquanto gera")
+    solta.set()
+    _esperar(lambda: doc.situacao == "erro")
+    assert len(chamadas) == 1
+    assert reg.encerrar(timeout=5)
+
+
+def test_descartado_durante_a_geracao_nao_deixa_saida_nem_chama_apos_gerar():
+    pasta = F.pasta_temporaria("registro_gerar_descartado")
+    solta, apos = threading.Event(), []
+    from pseudonimizador.saida import gerar as gerar_real
+
+    def gerar_lento(*a, **k):
+        solta.wait(10)
+        return gerar_real(*a, **k)
+    reg = Registro(pasta / "tmp", abrir_log(pasta), gerar=gerar_lento, apos_gerar=apos.append)
+    doc = reg.registrar_upload("c.docx", [F.contrato_docx(pasta / "c.docx").read_bytes()])
+    _esperar(lambda: doc.situacao == "revisao")
+    reg.pedir_geracao(doc.id, formato="layout", tipo=None, modo="reversivel",
+                      pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    reg.descartar(doc.id)
+    solta.set()
+    _esperar(lambda: not reg.fila.ocupada())
+    assert apos == []
+    assert not list((pasta / "S").glob("*")) and not list((pasta / "M").glob("*"))
+    assert reg.encerrar(timeout=5)
+
+
+def test_upload_invalido_ou_depois_de_encerrar():
+    pasta = F.pasta_temporaria("registro_upload_invalido")
+    reg = Registro(pasta / "tmp", abrir_log(pasta))
+    for nome in ("x.docx:y.pdf", "a<b.pdf", 'a"b.pdf', "a|b.pdf", "a?b.pdf", "a*b.pdf", "ab.pdf"):
+        try:
+            reg.registrar_upload(nome, [b"a"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"deveria recusar {nome!r}")
+    assert reg.encerrar(timeout=5)
+    try:
+        reg.registrar_upload("ok.docx", [b"a"])
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("depois de encerrar deveria recusar")
+    assert list((pasta / "tmp").iterdir()) == []
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

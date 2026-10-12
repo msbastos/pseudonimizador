@@ -27,6 +27,7 @@ SITUACOES = ("lendo", "revisao", "gerando", "pronto", "erro")
 CATEGORIAS = tuple(PREFIXOS)
 ORIGENS = ("janela", "pasta")
 ACEITOS = (".docx", ".pdf")
+_PROIBIDOS = set('<>:"|?*')      # inclui o ":" dos fluxos alternativos do NTFS
 
 
 class Fila:
@@ -100,16 +101,25 @@ class Registro:
         self._gerar = gerar
         self.apos_gerar = apos_gerar     # a pasta monitorada move o original (Task 9)
         self._docs: dict[str, Doc] = {}
-        self._trava = threading.Lock()
+        self._trava = threading.RLock()
+        self._tmp_pendentes: set[Path] = set()   # tmp que não deu para apagar ainda
+        self._encerrado = False
+        for resto in self.pasta_tmp.iterdir():   # sobras de uma execução que caiu
+            self._apagar_pasta(resto)
 
     # --- entrada -------------------------------------------------------------
     def registrar_upload(self, nome: str, pedacos: Iterable[bytes]) -> Doc:
         nome = Path(str(nome).replace("\\", "/")).name
         if not nome or nome in (".", "..") or Path(nome).suffix.lower() not in ACEITOS:
             raise ValueError("só arquivos .docx ou .pdf")
+        if any(c in _PROIBIDOS or ord(c) < 32 for c in nome):
+            raise ValueError("nome de arquivo com caracteres não permitidos")
         id_ = secrets.token_hex(8)
-        pasta = self.pasta_tmp / id_
-        pasta.mkdir(parents=True)
+        with self._trava:
+            if self._encerrado:
+                raise RuntimeError("o programa está encerrando")
+            pasta = self.pasta_tmp / id_
+            pasta.mkdir(parents=True)
         caminho = pasta / nome
         try:
             with open(caminho, "wb") as f:
@@ -124,6 +134,8 @@ class Registro:
         if origem not in ORIGENS:
             raise ValueError("origem inválida")
         caminho = Path(caminho)
+        if self._encerrado:
+            raise RuntimeError("o programa está encerrando")
         return self._registrar(Doc(secrets.token_hex(8), caminho.name, origem, caminho))
 
     def _registrar(self, doc: Doc) -> Doc:
@@ -134,8 +146,14 @@ class Registro:
         return doc
 
     def _ler_doc(self, doc: Doc) -> None:
+        try:
+            self._ler_doc_interno(doc)
+        finally:
+            if doc.descartado:
+                self._apagar_tmp(doc)
+
+    def _ler_doc_interno(self, doc: Doc) -> None:
         if doc.descartado:
-            self._apagar_tmp(doc)
             return
         try:
             documento = self._ler(doc.caminho)
@@ -147,15 +165,16 @@ class Registro:
             self._log.error("documento %s: falha na leitura (%s)", doc.id, type(e).__name__)
             self._falhar(doc, "Não foi possível ler o documento. Veja o log do servidor.", None)
             return
-        if doc.descartado:
-            self._apagar_tmp(doc)
-            return
-        doc.revisao, doc.avisos, doc.situacao = rev, list(documento.avisos), "revisao"
+        with self._trava:
+            if doc.descartado:
+                return
+            doc.revisao, doc.avisos, doc.situacao = rev, list(documento.avisos), "revisao"
         self._log.info("documento %s lido: %d item(ns), %d aviso(s)", doc.id, len(rev.itens), len(doc.avisos))
 
     def _falhar(self, doc: Doc, mensagem: str, motivo: str | None) -> None:
-        doc.erro = {"mensagem": mensagem, "valores": []}
-        doc.situacao = "erro"
+        with self._trava:
+            doc.erro = {"mensagem": mensagem, "valores": []}
+            doc.situacao = "erro"
         if motivo:
             self._log.info("documento %s: %s", doc.id, motivo)
 
@@ -171,8 +190,7 @@ class Registro:
 
     def lista(self) -> list[dict]:
         with self._trava:
-            docs = [d for d in self._docs.values() if not d.descartado]
-        return [self._resumo(d) for d in docs]
+            return [self._resumo(d) for d in self._docs.values() if not d.descartado]
 
     def _item(self, d: Doc, it: Item) -> dict:
         return {"categoria": it.categoria, "valor": it.valor, "aceito": it.aceito, "acrescido": it.acrescido,
@@ -180,7 +198,10 @@ class Registro:
                 "contextos": [d.revisao.contexto(a, b) for a, b in it.ocorrencias[:3]]}
 
     def detalhe(self, id_: str) -> dict:
-        d = self.obter(id_)
+        with self._trava:
+            return self._detalhe(self.obter(id_))
+
+    def _detalhe(self, d: Doc) -> dict:
         r = self._resumo(d)
         r["avisos"] = list(d.avisos)
         r["itens"] = [self._item(d, it) for it in d.revisao.itens] if d.revisao else []
@@ -194,59 +215,78 @@ class Registro:
 
     # --- revisão -------------------------------------------------------------
     def _em_revisao(self, id_: str) -> Doc:
+        """Chamar com a trava tomada: a checagem e a mudança andam juntas."""
         d = self.obter(id_)
         if d.revisao is None or d.situacao not in ("revisao", "erro"):
-            raise RuntimeError("o documento não está em revisão")
+            raise RuntimeError("o documento não está em revisão (ou já está sendo gerado)")
         return d
 
     def decidir(self, id_: str, categoria: str, valor: str, aceito: bool) -> None:
-        d = self._em_revisao(id_)
         chave = (str(categoria), normalizar(str(valor)))
-        try:
-            (d.revisao.aceitar if aceito else d.revisao.recusar)(chave)
-        except KeyError:
-            raise LookupError("item não encontrado") from None
+        with self._trava:
+            d = self._em_revisao(id_)
+            try:
+                (d.revisao.aceitar if aceito else d.revisao.recusar)(chave)
+            except KeyError:
+                raise LookupError("item não encontrado") from None
         self._log.info("documento %s: %s (%s)", id_, "aceito" if aceito else "recusado", categoria)
 
     def acrescentar(self, id_: str, valor: str, categoria: str = "pessoa") -> dict:
-        d = self._em_revisao(id_)
-        if categoria not in CATEGORIAS:
-            raise ValueError("categoria inválida")
-        item = d.revisao.acrescentar(str(valor), categoria)     # ValueError se não está no documento
-        self._log.info("documento %s: acrescido (%s, %d ocorrência(s))", id_, categoria, len(item.ocorrencias))
-        return self._item(d, item)
+        with self._trava:
+            d = self._em_revisao(id_)
+            if categoria not in CATEGORIAS:
+                raise ValueError("categoria inválida")
+            item = d.revisao.acrescentar(str(valor), categoria)     # ValueError se não está no documento
+            self._log.info("documento %s: acrescido (%s, %d ocorrência(s))", id_, categoria, len(item.ocorrencias))
+            return self._item(d, item)
 
     # --- geração -------------------------------------------------------------
     def pedir_geracao(self, id_: str, *, formato: str, tipo: str | None, modo: str,
                       pasta_saida: Path, pasta_mapas: Path) -> None:
-        d = self._em_revisao(id_)
         if formato not in FORMATOS or modo not in MODOS:
             raise ValueError("formato ou modo inválido")
         if formato == "texto" and tipo not in TIPOS:
             raise ValueError("no formato 'texto', escolha o tipo: docx ou pdf")
-        d.situacao, d.erro = "gerando", None
+        with self._trava:
+            d = self._em_revisao(id_)
+            d.situacao, d.erro = "gerando", None
         self.fila.enfileirar(lambda: self._gerar_doc(d, formato, tipo, modo, Path(pasta_saida), Path(pasta_mapas)))
 
     def _gerar_doc(self, d: Doc, formato, tipo, modo, pasta_saida: Path, pasta_mapas: Path) -> None:
         if d.descartado:
             return
         try:
-            g = self._gerar(d.revisao.documento, d.revisao.fechar(), formato=formato, tipo=tipo, modo=modo,
+            with self._trava:
+                resultado = d.revisao.fechar()
+            g = self._gerar(d.revisao.documento, resultado, formato=formato, tipo=tipo, modo=modo,
                             pasta_saida=pasta_saida, pasta_mapas=pasta_mapas)
         except VazamentoDetectado as e:
-            d.erro, d.situacao = {"mensagem": str(e), "valores": list(e.valores)}, "erro"
+            self._erro(d, str(e), list(e.valores))
             self._log.warning("documento %s: vazamento detectado (%d valor(es)); nada gerado", d.id, len(e.valores))
             return
         except (ValueError, OSError) as e:
-            d.erro, d.situacao = {"mensagem": str(e), "valores": []}, "erro"
+            self._erro(d, str(e), [])
             self._log.warning("documento %s: geração recusada (%s)", d.id, type(e).__name__)
             return
         except Exception as e:  # noqa: BLE001
-            d.erro, d.situacao = {"mensagem": "Falha ao gerar. Veja o log do servidor.", "valores": []}, "erro"
+            self._erro(d, "Falha ao gerar. Veja o log do servidor.", [])
             self._log.error("documento %s: falha na geração (%s)", d.id, type(e).__name__)
             return
-        d.resultado = {"saida": str(g.saida), "mapa": str(g.mapa) if g.mapa else None, "avisos": list(g.avisos)}
-        d.situacao = "pronto"
+        with self._trava:
+            descartado = d.descartado
+            if not descartado:
+                d.resultado = {"saida": str(g.saida), "mapa": str(g.mapa) if g.mapa else None,
+                               "avisos": list(g.avisos)}
+                d.situacao = "pronto"
+        if descartado:                       # a saída pertence a um trabalho descartado
+            for arq in (g.saida, g.mapa):
+                if arq is not None:
+                    try:
+                        Path(arq).unlink(missing_ok=True)
+                    except OSError:
+                        self._log.warning("documento %s: não deu para apagar uma saída descartada", d.id)
+            self._apagar_tmp(d)
+            return
         self._log.info("documento %s: gerado (%s, %s, %d aviso(s))", d.id, formato, modo, len(g.avisos))
         self._apagar_tmp(d)
         if self.apos_gerar is not None:
@@ -255,18 +295,40 @@ class Registro:
             except Exception as e:  # noqa: BLE001
                 self._log.error("documento %s: pós-geração falhou (%s)", d.id, type(e).__name__)
 
+    def _erro(self, d: Doc, mensagem: str, valores: list) -> None:
+        with self._trava:
+            d.erro, d.situacao = {"mensagem": mensagem, "valores": valores}, "erro"
+        if d.descartado:
+            self._apagar_tmp(d)
+
     # --- saída ---------------------------------------------------------------
     def descartar(self, id_: str) -> Doc:
         with self._trava:
             d = self._docs.pop(id_)
-        d.descartado = True
+            d.descartado = True
         self._apagar_tmp(d)            # se a leitura segura o arquivo, _ler_doc apaga depois
         self._log.info("documento %s descartado", id_)
         return d
 
     def _apagar_tmp(self, d: Doc) -> None:
         if d.pasta_tmp is not None:
-            shutil.rmtree(d.pasta_tmp, ignore_errors=True)
+            self._apagar_pasta(d.pasta_tmp)
+
+    def _apagar_pasta(self, pasta: Path) -> None:
+        """Apaga; se não der (arquivo preso no Windows), fica na lista de
+        pendentes, que o encerrar varre de novo."""
+        try:
+            if pasta.is_dir() and not pasta.is_symlink():
+                shutil.rmtree(pasta)
+            else:
+                pasta.unlink(missing_ok=True)
+        except OSError:
+            pass
+        with self._trava:
+            if pasta.exists():
+                self._tmp_pendentes.add(pasta)
+            else:
+                self._tmp_pendentes.discard(pasta)
 
     def ocupado(self) -> bool:
         with self._trava:
@@ -274,9 +336,14 @@ class Registro:
         return em_curso or self.fila.ocupada()
 
     def encerrar(self, timeout: float | None = None) -> bool:
+        with self._trava:
+            self._encerrado = True
         ok = self.fila.encerrar(timeout)
         with self._trava:
             docs = list(self._docs.values())
+            pendentes = list(self._tmp_pendentes)
         for d in docs:
             self._apagar_tmp(d)
+        for pasta in pendentes:
+            self._apagar_pasta(pasta)
         return ok

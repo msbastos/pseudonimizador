@@ -3,11 +3,11 @@
 """OCR local (RapidOCR, modelos embutidos no pacote): nada sai da máquina."""
 from __future__ import annotations
 
+import threading
 from functools import lru_cache
 
 import fitz
 import numpy as np
-import threading
 
 _TRAVA = threading.Lock()   # o RapidOCR não é thread-safe: uma leitura por vez
 
