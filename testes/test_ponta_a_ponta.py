@@ -58,6 +58,48 @@ def test_matriz_completa():
     assert not falhas, "\n".join(falhas)
 
 
+def _gerar_layout_reversivel(caminho, pasta):
+    doc = ler(caminho)
+    res = Revisao(doc).fechar()
+    g = gerar(doc, res, formato="layout", modo="reversivel",
+              pasta_saida=pasta / "Saida", pasta_mapas=pasta / "Mapas")
+    return ler(g.saida).texto
+
+
+def test_nome_que_vira_a_pagina_nao_escapa():
+    import fitz
+    pasta = F.pasta_temporaria("ponta_virada")
+    caminho = pasta / "virada.pdf"
+    doc = fitz.open()
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((72, 700), "Titular: Zuleiva Maria", fontname="helv", fontsize=11)
+    p1.insert_text((72, 120), "Cláusula primeira do contrato sintético de teste.", fontname="helv", fontsize=11)
+    p1.insert_text((72, 820), "Página 1 de 2", fontname="helv", fontsize=9)
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((72, 100), "Fernandes, inscrita no CPF 111.444.777-35.", fontname="helv", fontsize=11)
+    p2.insert_text((72, 820), "Página 2 de 2", fontname="helv", fontsize=9)
+    doc.save(str(caminho))
+    texto = _gerar_layout_reversivel(caminho, pasta)
+    assert "Fernandes" not in texto and "Zuleiva" not in texto and "111.444.777-35" not in texto, texto
+    assert "Página 1 de 2" in texto and "Página 2 de 2" in texto, texto
+
+
+def test_prenome_raro_antes_do_nome_nas_assinaturas_nao_escapa():
+    import fitz
+    pasta = F.pasta_temporaria("ponta_prenome_raro")
+    caminho = pasta / "assinaturas.pdf"
+    doc = fitz.open()
+    p = doc.new_page(width=595, height=842)
+    p.insert_text((72, 120), "Cláusula primeira do contrato sintético de teste.", fontname="helv", fontsize=11)
+    p.insert_text((72, 600), "Testemunha 1; CPF", fontname="helv", fontsize=11)
+    p.insert_text((72, 616), "Zuleiva Maria Souza", fontname="helv", fontsize=11)
+    p.insert_text((72, 632), "CPF: 111.444.777-35", fontname="helv", fontsize=11)
+    doc.save(str(caminho))
+    texto = _gerar_layout_reversivel(caminho, pasta)
+    assert "Zuleiva" not in texto and "Souza" not in texto, texto
+    assert "Cláusula primeira" in texto, texto
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

@@ -64,6 +64,59 @@ def test_pronome_me_nao_vira_sufixo_de_empresa():
     assert "Padaria Bom Pão ME" in a["empresa"], a
 
 
+def test_nome_continua_depois_de_uma_quebra_de_linha_se_a_proxima_palavra_e_sobrenome():
+    a = _por_categoria("Titular: Zuleiva Maria\nFernandes, inscrita no CPF 111.444.777-35.")
+    assert "Zuleiva Maria\nFernandes" in a["pessoa"], a
+    # pelo léxico (sem âncora)
+    a = _por_categoria("Assinado por Maria Souza\nFernandes em 2026.")
+    assert "Maria Souza\nFernandes" in a["pessoa"], a
+    # pela âncora, nome fora do léxico
+    a = _por_categoria("CONTRATANTE: Xandrelo Quintebor\nFernandes, brasileiro, solteiro.")
+    assert "Xandrelo Quintebor\nFernandes" in a["pessoa"], a
+
+
+def test_quebra_de_linha_so_continua_com_sobrenome_conhecido_e_so_uma():
+    # a linha seguinte não começa por sobrenome: o nome termina na quebra
+    a = _por_categoria("Assinado por Maria Souza\nCláusula primeira do contrato.")
+    assert "Maria Souza" in a["pessoa"] and not any("\n" in v for v in a["pessoa"]), a
+    # só uma quebra: parágrafo em branco separa
+    a = _por_categoria("Assinado por Maria Souza\n\nFernandes em 2026.")
+    assert not any("\n" in v for v in a["pessoa"]), a
+
+
+def test_prenome_desconhecido_antes_do_nome_entra():
+    a = _por_categoria("Testemunha 1; CPF\nZuleiva Maria Souza\nCPF: 111.444.777-35")
+    assert "Zuleiva Maria Souza" in a["pessoa"], a
+    # linhas do mesmo bloco do PDF chegam juntas com espaço: "CPF" é o rótulo da linha de cima
+    a = _por_categoria("Testemunha 1; CPF Zuleiva Maria Souza CPF: 111.444.777-35")
+    assert "Zuleiva Maria Souza" in a["pessoa"], a
+    a = _por_categoria("Testemunha 1: Zuleiva Maria Souza, CPF 111.444.777-35")
+    assert "Zuleiva Maria Souza" in a["pessoa"], a
+
+
+def test_palavra_anterior_nao_entra_sem_ser_prenome_em_forma_de_titulo():
+    for texto, esperado in [("Assinado por Maria Souza em 2026", "Maria Souza"),
+                            ("Contratante Maria Souza em 2026", "Maria Souza"),
+                            ("CONTRATO Maria Souza em 2026", "Maria Souza"),
+                            ("Cliente Maria Souza em 2026", "Maria Souza"),
+                            ("Nome: Maria Souza em 2026", "Maria Souza")]:
+        a = _por_categoria(texto)
+        assert esperado in a["pessoa"], (texto, a)
+    # a palavra anterior precisa estar no início da linha ou depois de pontuação
+    a = _por_categoria("Foi Zuleiva Maria Souza quem veio.")
+    assert "Maria Souza" in a["pessoa"] and "Zuleiva Maria Souza" not in a["pessoa"], a
+
+
+def test_ancora_titular():
+    a = _por_categoria("Titular: Zuleiva Fernandes Lima, CPF 111.444.777-35")
+    assert "Zuleiva Fernandes Lima" in a["pessoa"], a
+    # sem qualificação depois e fora do léxico: só a âncora acha
+    a = _por_categoria("Titular: Xandrelo Quintebor Vasques\nAgência 1234")
+    assert "Xandrelo Quintebor Vasques" in a["pessoa"], a
+    a = _por_categoria("Titular da conta: Xandrelo Quintebor Vasques\nAgência 1234")
+    assert "Xandrelo Quintebor Vasques" in a["pessoa"], a
+
+
 def test_duas_pessoas_ligadas_por_e_sao_dois_nomes():
     a = _por_categoria("Assinaram João Silva e Maria Souza o presente.")
     assert {"João Silva", "Maria Souza"} <= a["pessoa"], a
