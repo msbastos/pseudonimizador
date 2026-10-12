@@ -464,6 +464,48 @@ def test_pip_roda_isolado():
     assert "--isolated" in construir.argumentos_pip(Path("requirements.lock"), Path("x"))
 
 
+def test_fumaca_roda_o_script_no_python_embarcado_de_outra_pasta():
+    chamadas = []
+
+    def executar(args, **kw):
+        chamadas.append((list(args), kw))
+        return 0
+    app = Path("X") / "app"
+    construir.fumacar(app, executar=executar)
+    assert len(chamadas) == 1
+    args, kw = chamadas[0]
+    assert args[0].endswith("python.exe") and args[1:3] == ["-X", "utf8"] and args[-1].endswith("fumaca.py")
+    assert Path(args[-1]).is_file() and kw["cwd"] == str(app.parent)
+    try:
+        construir.fumacar(app, executar=lambda *a, **k: 1)
+    except SystemExit as e:
+        assert "OCR" in str(e) and "requirements.lock" in str(e)
+    else:
+        raise AssertionError("fumaça que falha tem de derrubar o build")
+
+
+def test_fumaca_cobre_importacoes_docx_pdf_ocr_restauracao_e_rede():
+    import ast
+    fonte = (RAIZ / "empacotamento" / "fumaca.py").read_text(encoding="utf-8")
+    ast.parse(fonte)
+    lista = fonte.split("VERIFICACOES = (")[1]
+    for nome in ("importacoes", "codigo_do_pacote", "docx_pseudonimizar_e_restaurar", "pdf_com_texto",
+                 "pdf_escaneado_ocr", "rede_bloqueada"):
+        assert f"def {nome}()" in fonte and nome in lista, nome
+    assert "socket" in fonte and "127.0.0.1" in fonte
+
+
+def test_fumaca_roda_de_verdade_no_python_embarcado_quando_ha_build():
+    """Só se build/app existir (montagem local): o script de verdade, no Python embarcado, passa."""
+    import subprocess
+    py = RAIZ / "build" / "app" / "python" / "python.exe"
+    if not py.is_file():
+        return
+    r = subprocess.run([str(py), "-X", "utf8", str(construir.FUMACA)], cwd=str(RAIZ / "build"),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, (r.stdout[-800:], r.stderr[-800:])
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())
