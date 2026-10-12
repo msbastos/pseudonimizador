@@ -102,6 +102,40 @@ def test_imagem_minuscula_nao_passa_pelo_ocr():
     assert d.paginas_ocr == [] and not d.avisos
 
 
+def _pdf_nome_na_virada(caminho):
+    """Duas páginas: o nome do titular começa na última linha do corpo da página 1
+    e termina na primeira da página 2. Na página 1 o fluxo do PDF traz a linha do
+    nome ANTES de outro bloco do corpo e do rodapé (como nos PDFs reais)."""
+    doc = fitz.open()
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((72, 700), "Titular: Zuleiva Maria", fontname="helv", fontsize=11)
+    p1.insert_text((72, 120), "Cláusula primeira do contrato sintético de teste.", fontname="helv", fontsize=11)
+    p1.insert_text((72, 820), "Página 1 de 2", fontname="helv", fontsize=9)
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((72, 100), "Fernandes, inscrita no CPF 111.444.777-35.", fontname="helv", fontsize=11)
+    p2.insert_text((72, 820), "Página 2 de 2", fontname="helv", fontsize=9)
+    doc.save(str(caminho))
+    return caminho
+
+
+def test_ordem_de_leitura_junta_o_nome_da_virada_de_pagina():
+    d = ler_pdf(_pdf_nome_na_virada(F.pasta_temporaria("leitura_pdf10") / "v.pdf"))
+    assert "Zuleiva Maria\nFernandes" in d.texto, repr(d.texto)
+    assert len(d.origens) == len(d.texto)
+
+
+def test_rodape_vai_para_o_fim_do_texto_e_mantem_a_origem():
+    d = ler_pdf(_pdf_nome_na_virada(F.pasta_temporaria("leitura_pdf11") / "v.pdf"))
+    t = d.texto
+    assert t.index("Página 1 de 2") > t.index("Fernandes") and t.index("Página 2 de 2") > t.index("Fernandes"), repr(t)
+    assert t.index("Página 1 de 2") < t.index("Página 2 de 2")
+    assert t.index("Cláusula primeira") < t.index("Titular")  # corpo em ordem de leitura
+    o = d.origens[t.index("Página 1 de 2")]
+    assert isinstance(o, OrigemPdf) and o.pagina == 0 and o.rect[1] > 790
+    o = d.origens[t.index("Página 2 de 2")]
+    assert o.pagina == 1
+
+
 def test_pdf_com_senha_levanta_erro():
     caminho = F.pasta_temporaria("leitura_pdf7") / "s.pdf"
     doc = fitz.open()
