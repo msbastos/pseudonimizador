@@ -80,6 +80,25 @@ def test_encerrar_por_segredo_e_por_inatividade():
     assert "inatividade" in s.log_texto()
 
 
+def test_encerrar_por_segredo_recusa_se_ha_revisao_pendente():
+    """Substituição de versão: com documento em revisão/erro/lendo/gerando o /encerrar
+    do segredo responde 409 e NÃO deixa pedido pendente; pronto não conta."""
+    from pathlib import Path
+    from pseudonimizador.web.registro import Doc
+    with ServidorDeTeste("web_srv_subst", vigia_s=0.1) as s:
+        reg = s.app.registro
+        for sit in ("revisao", "erro", "lendo", "gerando"):
+            reg._docs["a" * 16] = Doc("a" * 16, "x.docx", "janela", Path("x.docx"), situacao=sit)
+            status, r = s.post("/encerrar", {"segredo": s.app.segredo}, token=False)
+            assert status == 409 and r["erro"] == "ocupado", (sit, status, r)
+            assert not s.app.encerrar_pedido and s.thread.is_alive()
+        reg._docs["a" * 16] = Doc("a" * 16, "x.docx", "janela", Path("x.docx"), situacao="pronto")
+        status, r = s.post("/encerrar", {"segredo": s.app.segredo}, token=False)
+        assert status == 200 and r["ok"] and s.app.encerrar_pedido
+        s.thread.join(5)
+        assert not s.thread.is_alive()
+
+
 def test_nao_ascii_no_token_e_no_segredo_da_403_nao_500():
     with ServidorDeTeste("web_srv7") as s:
         # http.client só envia latin-1 nos cabeçalhos: "é" chega como o byte 0xE9

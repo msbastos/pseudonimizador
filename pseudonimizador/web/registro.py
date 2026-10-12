@@ -357,6 +357,15 @@ class Registro:
             else:
                 self._tmp_pendentes.discard(pasta)
 
+    def trabalho_a_perder(self) -> bool:
+        """Há documento lendo, em revisão, gerando ou com erro (pronto não conta)?
+        Quem decide a substituição de versão consulta isto: encerrar perderia
+        o trabalho de revisão e apagaria o tmp."""
+        with self._trava:
+            tem = any(d.situacao in ("lendo", "revisao", "gerando", "erro") and not d.descartado
+                      for d in self._docs.values())
+        return tem or self.fila.ocupada()
+
     def ocupado(self) -> bool:
         with self._trava:
             em_curso = any(d.situacao in ("lendo", "gerando") for d in self._docs.values())

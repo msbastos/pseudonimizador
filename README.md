@@ -36,7 +36,8 @@ servidor fica só em `127.0.0.1`, numa porta livre, e nada sai do computador.
 - **Configurações**: pasta base (com `Entrada`, `Saida` e `Mapas`), pastas de saída e de mapas
   (nunca uma dentro da outra) e os padrões do lote.
 - **Encerrar** (no menu) fecha o servidor assim que terminar o que está fazendo; sem uso por 30
-  minutos ele também se encerra. Abrir o atalho de novo com o app aberto só abre outra janela.
+  minutos ele também se encerra. Abrir o atalho de novo com o app aberto só abre outra janela. Se o app aberto for de outra versão e houver documento em andamento
+  (lendo, em revisão, gerando ou com erro), ele não é trocado: feche o aplicativo pelo menu Encerrar para atualizar.
 
 Estado, configuração e log ficam em `%LOCALAPPDATA%\Pseudonimizador` (`config.json`,
 `logs\servidor.log` — sem valores nem nomes de arquivo). Os mapas são dado pessoal: ficam em

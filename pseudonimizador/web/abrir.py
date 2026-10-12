@@ -136,7 +136,9 @@ def pedir_token(porta: int, segredo: str) -> str | None:
 
 
 def pedir_encerramento(porta: int, segredo: str) -> bool:
-    """Pede à instância viva (de outra versão) que se encerre quando ociosa."""
+    """Pede à instância viva (de outra versão) que se encerre. False se ela
+    recusou (409: há documentos em andamento) ou não respondeu; nesse caso
+    ela não guarda pedido nenhum e segue viva."""
     dados = _pedir(porta, "/encerrar", segredo)
     return bool(dados and dados.get("ok"))
 
@@ -219,8 +221,12 @@ def abrir(*, pasta_estado: Path | None = None, nome_mutex: str = NOME_MUTEX,
             if not substituir:
                 raise ErroAbertura("Outro Pseudonimizador está abrindo ou fechando. Espere alguns segundos e abra de novo.")
         app = (criar_app or _criar_app_padrao)(pasta)
-        servidor = Servidor(app, 0)
-        gravar_instancia(pasta, app.porta, app.segredo, versao)
+        try:
+            servidor = Servidor(app, 0)
+            gravar_instancia(pasta, app.porta, app.segredo, versao)
+        except BaseException:
+            app.encerrar()
+            raise
         try:
             app.log.info("servidor no ar (versão %s)", versao)
             abrir_janela(servidor.url(app.emitir_token()))

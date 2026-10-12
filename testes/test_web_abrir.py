@@ -119,7 +119,7 @@ def test_segunda_abertura_nao_constroi_aplicacao_nem_toca_no_tmp():
     assert not t.is_alive()
 
 
-def test_instancia_de_outra_versao_e_substituida():
+def test_instancia_vazia_de_outra_versao_e_substituida():
     pasta = F.pasta_temporaria("abrir_versao") / "estado"
     nome = f"Pseudonimizador-Teste-{secrets.token_hex(4)}"
     urls = []
@@ -128,21 +128,67 @@ def test_instancia_de_outra_versao_e_substituida():
     t.start()
     _esperar(lambda: len(urls) == 1)
     porta_velha = A.ler_instancia(pasta)["porta"]
-    # a abertura da versão nova pede à velha que se encerre e sobe no lugar; a nova sai por inatividade
+    # sem trabalho a perder: a velha sai e a nova sobe no lugar (e sai por inatividade)
     codigo = A.abrir(pasta_estado=pasta, nome_mutex=nome, abrir_janela=urls.append, criar_app=_criar_app(0.5),
                      vigia_s=0.1, versao=VERSAO)
     assert codigo == 0 and len(urls) == 2
+    porta_nova = int(urls[1].split(":")[2].split("/")[0])
+    assert porta_nova != porta_velha and f":{porta_velha}/" in urls[0]
     t.join(5)
     assert not t.is_alive() and A.ler_instancia(pasta) is None
-    assert porta_velha > 0
 
 
-def test_instancia_morta_no_json_nao_bloqueia():
+def test_instancia_com_revisao_pendente_de_outra_versao_e_mantida():
+    from pseudonimizador.web.registro import Doc
+    pasta = F.pasta_temporaria("abrir_versao_revisao") / "estado"
+    nome = f"Pseudonimizador-Teste-{secrets.token_hex(4)}"
+    urls, apps = [], []
+
+    def criar(p):
+        apps.append(_criar_app(60.0)(p))
+        return apps[-1]
+    t = threading.Thread(target=A.abrir, kwargs=dict(pasta_estado=pasta, nome_mutex=nome, abrir_janela=urls.append,
+                                                     criar_app=criar, vigia_s=0.1, versao="0.0.1"), daemon=True)
+    t.start()
+    _esperar(lambda: len(urls) == 1)
+    porta_velha = A.ler_instancia(pasta)["porta"]
+    apps[0].registro._docs["b" * 16] = Doc("b" * 16, "x.docx", "janela", Path("x.docx"), situacao="revisao")
+    construidas = []
+    assert A.abrir(pasta_estado=pasta, nome_mutex=nome, abrir_janela=urls.append,
+                   criar_app=lambda p: construidas.append(p), versao=VERSAO) == 0
+    assert construidas == [] and len(urls) == 2 and urls[1].startswith(f"http://127.0.0.1:{porta_velha}/#t=")
+    assert t.is_alive() and not apps[0].encerrar_pedido and "b" * 16 in apps[0].registro._docs
+    assert _pedir(porta_velha, "/api/encerrar", urls[1].split("#t=")[1], {}) == 200      # menu Encerrar
+    t.join(15)
+    assert not t.is_alive()
+
+
+def test_instancia_morta_no_json_nao_e_usada():
+    """Mutex preso (como se outro processo estivesse abrindo) + instancia.json de um
+    pid que já saiu: processo_vivo() é falso, ninguém é contatado e o erro é o claro."""
+    import subprocess
+    import sys
     pasta = F.pasta_temporaria("abrir_morto") / "estado"
     pasta.mkdir(parents=True)
-    (pasta / "instancia.json").write_text(json.dumps({"pid": 0, "porta": 1, "segredo": "x", "versao": VERSAO}), encoding="utf-8")
-    urls = []
+    filho = subprocess.Popen([sys.executable, "-c", "pass"])
+    filho.wait(30)
+    assert not A.processo_vivo(filho.pid)
+    (pasta / "instancia.json").write_text(json.dumps({"pid": filho.pid, "porta": 1, "segredo": "x", "versao": VERSAO}), encoding="utf-8")
     nome = f"Pseudonimizador-Teste-{secrets.token_hex(4)}"
+    dono = A.Mutex(nome)
+    urls, construidas = [], []
+    try:
+        try:
+            A.abrir(pasta_estado=pasta, nome_mutex=nome, abrir_janela=urls.append, criar_app=construidas.append,
+                    tentativas=2, espera_s=0.05)
+        except A.ErroAbertura as e:
+            assert "abrindo ou fechando" in str(e)
+        else:
+            raise AssertionError("a instância morta não pode ser usada")
+    finally:
+        dono.fechar()
+    assert urls == [] and construidas == []
+    # sem o mutex preso, o json velho é simplesmente sobrescrito
     assert A.abrir(pasta_estado=pasta, nome_mutex=nome, abrir_janela=urls.append, criar_app=_criar_app(0.5), vigia_s=0.1) == 0
     assert len(urls) == 1 and A.ler_instancia(pasta) is None
 

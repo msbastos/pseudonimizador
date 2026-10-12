@@ -314,6 +314,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 self.app.log.info("segunda abertura: token emitido")
                 self._json(200, {"token": app.emitir_token()})
             else:
+                if app.registro.trabalho_a_perder():     # substituição de versão: não leva o trabalho junto
+                    raise ErroDaApi(409, "ocupado", "há documentos em andamento; feche pelo menu Encerrar para atualizar")
                 app.pedir_encerramento()
                 self.app.log.info("encerramento pedido por outra instância")
                 self._json(200, {"ok": True})
