@@ -112,8 +112,8 @@ def _configurar(a) -> int:
     dados["pasta_base"] = str(a.pasta_base)
     cfg = estado.validar(dados)
     pasta.mkdir(parents=True, exist_ok=True)
+    estado.preparar_pastas(cfg)        # antes de gravar: pasta impossível não troca a config
     estado.gravar(pasta, cfg)
-    estado.preparar_pastas(cfg)
     print(f"pasta dos arquivos: {cfg.pasta_base}")
     return 0
 

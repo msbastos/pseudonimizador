@@ -123,6 +123,19 @@ def test_configurar_preserva_os_outros_campos_e_recusa_caminho_relativo():
     assert json.loads((estado_dir / "config.json").read_text(encoding="utf-8"))["pasta_base"] == str(pasta / "B")
 
 
+def test_configurar_pasta_impossivel_nao_altera_a_config():
+    pasta = F.pasta_temporaria("cli_configurar3")
+    estado_dir = pasta / "estado"
+    p = _cli_estado(estado_dir, "configurar", "--pasta-base", pasta / "A")
+    assert p.returncode == 0, p.stderr
+    antes = (estado_dir / "config.json").read_bytes()
+    arquivo = pasta / "arquivo.txt"
+    arquivo.write_text("x", encoding="utf-8")
+    p = _cli_estado(estado_dir, "configurar", "--pasta-base", arquivo / "Sub")
+    assert p.returncode == 2 and "erro:" in p.stderr and "Traceback" not in p.stderr, p.stderr
+    assert (estado_dir / "config.json").read_bytes() == antes
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())
