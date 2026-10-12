@@ -62,6 +62,59 @@ def test_restaurar_docx_valida_o_nome_como_o_upload():
         assert not list((s.pasta / "estado" / "tmp").iterdir())
 
 
+def test_identificador_hostil_nao_le_fora_dos_mapas():
+    import docx
+    with ServidorDeTeste("web_rest4") as s:
+        doc, res, g = _gerado(s)
+        (s.pasta / "Base" / "fora.json").write_text('{"tokens": {}}', encoding="utf-8")
+        hostil = s.pasta / "hostil.docx"
+        d = docx.Document(str(g.saida))
+        d.core_properties.identifier = "pseudonimizador:..\\fora"
+        d.save(str(hostil))
+        status, e = s.enviar_arquivo(hostil, rota="/api/restaurar/docx")
+        assert status == 409 and e["erro"] == "mapa", (status, e)
+        d.core_properties.identifier = "pseudonimizador:../fora"
+        d.save(str(hostil))
+        assert s.enviar_arquivo(hostil, rota="/api/restaurar/docx")[0] == 409
+
+
+def test_mapa_corrompido_da_409_e_erro_de_gravacao_nao_e_docx_invalido():
+    import docx
+    with ServidorDeTeste("web_rest5") as s:
+        doc, res, g = _gerado(s)
+        for conteudo in ("{nao json", "[1, 2]", '{"tokens": 3}'):
+            g.mapa.write_text(conteudo, encoding="utf-8")
+            status, e = s.post("/api/restaurar/texto", {"texto": "[[PESSOA_1]]", "mapa": g.mapa.stem})
+            assert status == 409 and e["erro"] == "mapa" and "corrompido" in e["mensagem"], (conteudo, status, e)
+            status, e = s.enviar_arquivo(g.saida, rota="/api/restaurar/docx")
+            assert status == 409 and e["erro"] == "mapa" and "corrompido" in e["mensagem"], (conteudo, status, e)
+            status, e = s.enviar_arquivo(g.saida, rota="/api/restaurar/docx", cabecalhos={"X-Mapa": g.mapa.stem})
+            assert status == 409 and e["erro"] == "mapa", (status, e)
+        assert not list((s.pasta / "estado" / "tmp").iterdir())
+
+
+def test_falha_de_gravacao_da_restauracao_da_409_arquivo():
+    import pseudonimizador.web.servidor as W
+    original = W.restaurar_docx
+
+    def quebrada(*a, **k):
+        raise PermissionError("sem espaço")
+    with ServidorDeTeste("web_rest6") as s:
+        doc, res, g = _gerado(s)
+        W.restaurar_docx = quebrada
+        try:
+            status, e = s.enviar_arquivo(g.saida, rota="/api/restaurar/docx")
+        finally:
+            W.restaurar_docx = original
+        assert status == 409 and e["erro"] == "arquivo" and "gravar" in e["mensagem"], (status, e)
+        W.restaurar_docx = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bug"))
+        try:
+            status, e = s.enviar_arquivo(g.saida, rota="/api/restaurar/docx")
+        finally:
+            W.restaurar_docx = original
+        assert status == 500, (status, e)
+
+
 def test_restaurar_texto_e_token_orfao():
     with ServidorDeTeste("web_rest2") as s:
         doc, res, g = _gerado(s)

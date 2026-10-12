@@ -56,6 +56,17 @@ def test_restaurar_docx_alvo_de_hyperlink_e_token_orfao():
         raise AssertionError("tóken órfão deveria ser apontado")
 
 
+def test_achar_mapa_recusa_id_fora_do_padrao():
+    from pseudonimizador.saida import mapas
+    pasta = F.pasta_temporaria("achar_mapa")
+    (pasta / "Mapas").mkdir()
+    (pasta / "Mapas" / "bom-1.json").write_text("{}", encoding="utf-8")
+    (pasta / "fora.json").write_text("{}", encoding="utf-8")
+    assert mapas.achar(pasta / "Mapas", "bom-1") == pasta / "Mapas" / "bom-1.json"
+    for ruim in ("..\\fora", "../fora", str(pasta / "fora"), "", "a/b", "a" * 81, "x\x00"):
+        assert mapas.achar(pasta / "Mapas", ruim) is None, ruim
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

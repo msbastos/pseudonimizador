@@ -17,6 +17,7 @@ import socket
 import sys
 import threading
 import time
+import zipfile
 from dataclasses import asdict
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,9 +25,12 @@ from pathlib import Path
 from typing import Callable, Iterator
 from urllib.parse import unquote, urlsplit
 
+from docx.opc.exceptions import PackageNotFoundError
+from lxml import etree
+
 from .. import VERSAO
 from ..estado import Config, abrir_log, carregar, preparar_pastas
-from ..restaurar import TokenOrfao, mapa_do_docx, restaurar_docx, restaurar_texto
+from ..restaurar import TokenOrfao, id_do_mapa, restaurar_docx, restaurar_texto
 from ..saida import _destino, mapas
 from .registro import DocumentoInexistente, Registro, validar_nome_upload
 
@@ -38,6 +42,7 @@ CABECALHOS = {"Content-Security-Policy": "default-src 'self'", "X-Content-Type-O
 LIMITE_JSON = 2 * 1024 * 1024
 LIMITE_ARQUIVO = 100 * 1024 * 1024
 RE_ID = r"[0-9a-f]{16}"
+ERROS_DE_DOCX = (zipfile.BadZipFile, KeyError, ValueError, etree.XMLSyntaxError, PackageNotFoundError)
 ROTAS: list[tuple[str, str]] = [
     ("GET", r"/api/estado"),
     ("POST", r"/api/encerrar"),
@@ -402,7 +407,16 @@ class Manipulador(BaseHTTPRequestHandler):
         caminho = mapas.achar(self.app.config.mapas, id_mapa)
         if caminho is None:
             raise ErroDaApi(404, "mapa", "mapa não encontrado")
-        return mapas.carregar(caminho)
+        return self._mapa_valido(caminho)
+
+    def _mapa_valido(self, caminho: Path) -> dict:
+        try:
+            mapa = mapas.carregar(caminho)
+        except (OSError, ValueError):
+            mapa = None
+        if not isinstance(mapa, dict) or not isinstance(mapa.get("tokens"), dict):
+            raise ErroDaApi(409, "mapa", "o mapa escolhido está corrompido")
+        return mapa
 
     def _api_restaurar(self, metodo: str, caminho: str) -> bool:
         cfg = self.app.config
@@ -447,9 +461,11 @@ class Manipulador(BaseHTTPRequestHandler):
                     mapa = self._mapa_escolhido(id_mapa)
                 else:
                     try:
-                        mapa = mapa_do_docx(origem, cfg.mapas)
-                    except Exception:  # noqa: BLE001 — zip/XML inválido
+                        ident = id_do_mapa(origem)
+                    except ERROS_DE_DOCX:
                         raise ErroDaApi(409, "arquivo", "o arquivo não é um DOCX válido") from None
+                    achado = mapas.achar(cfg.mapas, ident) if ident else None
+                    mapa = self._mapa_valido(achado) if achado else None
                 if mapa is None:
                     raise ErroDaApi(409, "mapa", "Mapa não encontrado para este arquivo; escolha um da lista.")
                 cfg.saida.mkdir(parents=True, exist_ok=True)
@@ -458,8 +474,10 @@ class Manipulador(BaseHTTPRequestHandler):
                     n = restaurar_docx(origem, destino, mapa)
                 except TokenOrfao as e:
                     raise ErroDaApi(409, "orfao", str(e)) from None
-                except Exception:  # noqa: BLE001
+                except ERROS_DE_DOCX:
                     raise ErroDaApi(409, "arquivo", "o arquivo não é um DOCX válido") from None
+                except OSError:
+                    raise ErroDaApi(409, "arquivo", "não foi possível gravar o arquivo restaurado") from None
             finally:
                 shutil.rmtree(pasta, ignore_errors=True)
             self.app.log.info("restauração de DOCX: %d troca(s)", n)
