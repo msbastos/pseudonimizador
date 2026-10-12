@@ -28,13 +28,27 @@ def _identificadores(limpo: str) -> list[tuple[int, int, str]]:
     return achados
 
 
-def detectar(texto: str) -> list[Ocorrencia]:
+def _sem_a_parte_de_baixo_se_toca_identificador(nome, ids, limpo):
+    """O nome que continuou na linha de baixo e ali esbarra num identificador (endereço, e-mail...) volta a
+    acabar antes da quebra: o identificador fica inteiro."""
+    a, b, cat = nome
+    p = limpo.find("\n", a, b)
+    if p < 0 or not any(i[0] < b and i[1] > p for i in ids):
+        return nome
+    fim = a + len(limpo[a:p].rstrip())
+    return (a, fim, cat) if fim > a else None
+
+
+def detectar(texto: str, entre_linhas: bool = True) -> list[Ocorrencia]:
+    """`entre_linhas`: o nome pode continuar na linha de baixo (PDF, que quebra a linha onde quer; no DOCX
+    cada linha é um parágrafo e o valor com quebra não se restaura no lugar)."""
     limpo, ini, fim = limpar_com_indices(texto)
     ids = _identificadores(limpo)
+    achados = [_sem_a_parte_de_baixo_se_toca_identificador(n, ids, limpo) for n in pessoas_e_empresas(limpo, entre_linhas)]
     # nome inteiro dentro de um identificador ("Rua Joaquim Nabuco, 123") é parte dele e cai;
     # nome que cruza só parte do identificador vence (como no motor) e o identificador cede
-    nomes = [n for n in pessoas_e_empresas(limpo)
-             if not any(i[0] <= n[0] and n[1] <= i[1] for i in ids)]
+    nomes = [n for n in achados
+             if n and not any(i[0] <= n[0] and n[1] <= i[1] for i in ids)]
     candidatos = nomes + [i for i in ids if all(i[1] <= n[0] or i[0] >= n[1] for n in nomes)]
     candidatos.sort(key=lambda a: (a[0], -(a[1] - a[0])))
     saida: list[Ocorrencia] = []

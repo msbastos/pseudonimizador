@@ -58,6 +58,93 @@ def test_matriz_completa():
     assert not falhas, "\n".join(falhas)
 
 
+def _gerar_layout_reversivel(caminho, pasta):
+    doc = ler(caminho)
+    res = Revisao(doc).fechar()
+    g = gerar(doc, res, formato="layout", modo="reversivel",
+              pasta_saida=pasta / "Saida", pasta_mapas=pasta / "Mapas")
+    return ler(g.saida).texto
+
+
+def test_nome_que_vira_a_pagina_nao_escapa():
+    import fitz
+    pasta = F.pasta_temporaria("ponta_virada")
+    caminho = pasta / "virada.pdf"
+    doc = fitz.open()
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((72, 700), "Titular: Zuleiva Maria", fontname="helv", fontsize=11)
+    p1.insert_text((72, 120), "Cláusula primeira do contrato sintético de teste.", fontname="helv", fontsize=11)
+    p1.insert_text((72, 820), "Página 1 de 2", fontname="helv", fontsize=9)
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((72, 100), "Fernandes, inscrita no CPF 111.444.777-35.", fontname="helv", fontsize=11)
+    p2.insert_text((72, 820), "Página 2 de 2", fontname="helv", fontsize=9)
+    doc.save(str(caminho))
+    texto = _gerar_layout_reversivel(caminho, pasta)
+    assert "Fernandes" not in texto and "Zuleiva" not in texto and "111.444.777-35" not in texto, texto
+    assert "Página 1 de 2" in texto and "Página 2 de 2" in texto, texto
+
+
+def test_prenome_raro_antes_do_nome_nas_assinaturas_nao_escapa():
+    import fitz
+    pasta = F.pasta_temporaria("ponta_prenome_raro")
+    caminho = pasta / "assinaturas.pdf"
+    doc = fitz.open()
+    p = doc.new_page(width=595, height=842)
+    p.insert_text((72, 120), "Cláusula primeira do contrato sintético de teste.", fontname="helv", fontsize=11)
+    p.insert_text((72, 600), "Testemunha 1; CPF", fontname="helv", fontsize=11)
+    p.insert_text((72, 616), "Zuleiva Maria Souza", fontname="helv", fontsize=11)
+    p.insert_text((72, 632), "CPF: 111.444.777-35", fontname="helv", fontsize=11)
+    doc.save(str(caminho))
+    texto = _gerar_layout_reversivel(caminho, pasta)
+    assert "Zuleiva" not in texto and "Souza" not in texto, texto
+    assert "Cláusula primeira" in texto, texto
+
+
+def test_nome_seguido_de_endereco_na_linha_de_baixo_nao_engole_o_endereco():
+    from types import SimpleNamespace
+    from pseudonimizador.motor.trocas import aplicar_trocas
+    for texto, numero in (("Locador: Maria Souza\nRua das Flores, 100, Centro", "100"),
+                          ("À Sra. Maria Souza\nRua Marechal Deodoro, 1500, apto 21", "1500"),
+                          ("Locador: Maria Souza\nAvenida Getúlio Vargas, 1500", "1500")):
+        doc = SimpleNamespace(texto=texto, tipo="pdf_texto")
+        saida = aplicar_trocas(texto, Revisao(doc).fechar().trocas)
+        assert numero not in saida and "Maria" not in saida, (texto, saida)
+
+
+def test_docx_com_nome_em_dois_paragrafos_restaura_igual_ao_original():
+    pasta = F.pasta_temporaria("ponta_docx_dois_paragrafos")
+    caminho = pasta / "d.docx"
+    d = docx.Document()
+    d.add_paragraph("Titular: Zuleiva Maria")
+    d.add_paragraph("Fernandes, inscrita no CPF 111.444.777-35.")
+    d.save(str(caminho))
+    doc = ler(caminho)
+    g = gerar(doc, Revisao(doc).fechar(), formato="layout", modo="reversivel",
+              pasta_saida=pasta / "Saida", pasta_mapas=pasta / "Mapas")
+    restaurado = pasta / "restaurado.docx"
+    restaurar_docx(g.saida, restaurado, mapa_do_docx(g.saida, pasta / "Mapas"))
+    assert ler(restaurado).texto == doc.texto
+
+
+def test_rotulo_repetido_em_formulario_de_varias_paginas_continua_ancorando_o_nome():
+    import fitz
+    from pseudonimizador.deteccao import detectar
+    pasta = F.pasta_temporaria("ponta_formulario")
+    caminho = pasta / "form.pdf"
+    doc = fitz.open()
+    f = dict(fontname="helv", fontsize=11)
+    for nome in ("Xandrelo Quintebor Vasques", "Ylmara Torquesi Bento"):
+        p = doc.new_page(width=595, height=842)
+        p.insert_text((72, 100), "Formulário de cadastro sintético", **f)
+        p.insert_text((72, 300), "Titular:", **f)
+        p.insert_text((72, 316), nome, **f)
+    doc.save(str(caminho))
+    lido = ler(caminho)
+    assert not any(o.categoria == "pessoa" and "Formulário" in o.valor for o in detectar(lido.texto)), lido.texto
+    texto = _gerar_layout_reversivel(caminho, pasta)
+    assert "Xandrelo" not in texto and "Quintebor" not in texto and "Ylmara" not in texto and "Torquesi" not in texto, texto
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

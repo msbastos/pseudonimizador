@@ -109,7 +109,13 @@ def _texto_docx(caminho: Path) -> tuple[str, str]:
 def _texto_pdf(caminho: Path, paginas_ocr) -> tuple[str, str]:
     import fitz
     from ..leitura.ocr import ocr_pagina
+    from ..leitura.pdf_ import ler_pdf
     corpo, extras = [], []
+    try:   # o texto na ordem de leitura do leitor (rodapés ao fim), além da extração simples abaixo
+        corpo.append(ler_pdf(caminho).texto)
+    except Exception as e:  # noqa: BLE001 — a extração simples continua valendo
+        import logging   # só o tipo da exceção: nada de caminho nem de valor
+        logging.getLogger(__name__).warning("conferência: leitura em ordem de leitura falhou (%s)", type(e).__name__)
     with fitz.open(str(caminho)) as pdf:
         extras.extend(str(v) for v in pdf.metadata.values() if v)
         extras.append(pdf.get_xml_metadata() or "")

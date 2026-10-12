@@ -64,6 +64,59 @@ def test_pronome_me_nao_vira_sufixo_de_empresa():
     assert "Padaria Bom Pão ME" in a["empresa"], a
 
 
+def test_nome_continua_depois_de_uma_quebra_de_linha_se_a_proxima_palavra_e_sobrenome():
+    a = _por_categoria("Titular: Zuleiva Maria\nFernandes, inscrita no CPF 111.444.777-35.")
+    assert "Zuleiva Maria\nFernandes" in a["pessoa"], a
+    # pelo léxico (sem âncora)
+    a = _por_categoria("Assinado por Maria Souza\nFernandes em 2026.")
+    assert "Maria Souza\nFernandes" in a["pessoa"], a
+    # pela âncora, nome fora do léxico
+    a = _por_categoria("CONTRATANTE: Xandrelo Quintebor\nFernandes, brasileiro, solteiro.")
+    assert "Xandrelo Quintebor\nFernandes" in a["pessoa"], a
+
+
+def test_quebra_de_linha_so_continua_com_sobrenome_conhecido_e_so_uma():
+    # a linha seguinte não começa por sobrenome: o nome termina na quebra
+    a = _por_categoria("Assinado por Maria Souza\nCláusula primeira do contrato.")
+    assert "Maria Souza" in a["pessoa"] and not any("\n" in v for v in a["pessoa"]), a
+    # só uma quebra: parágrafo em branco separa
+    a = _por_categoria("Assinado por Maria Souza\n\nFernandes em 2026.")
+    assert not any("\n" in v for v in a["pessoa"]), a
+
+
+def test_prenome_desconhecido_antes_do_nome_entra():
+    a = _por_categoria("Testemunha 1; CPF\nZuleiva Maria Souza\nCPF: 111.444.777-35")
+    assert "Zuleiva Maria Souza" in a["pessoa"], a
+    # linhas do mesmo bloco do PDF chegam juntas com espaço: "CPF" é o rótulo da linha de cima
+    a = _por_categoria("Testemunha 1; CPF Zuleiva Maria Souza CPF: 111.444.777-35")
+    assert "Zuleiva Maria Souza" in a["pessoa"], a
+    a = _por_categoria("Testemunha 1: Zuleiva Maria Souza, CPF 111.444.777-35")
+    assert "Zuleiva Maria Souza" in a["pessoa"], a
+
+
+def test_palavra_anterior_nao_entra_sem_ser_prenome_em_forma_de_titulo():
+    for texto, esperado in [("Assinado por Maria Souza em 2026", "Maria Souza"),
+                            ("Contratante Maria Souza em 2026", "Maria Souza"),
+                            ("CONTRATO Maria Souza em 2026", "Maria Souza"),
+                            ("Cliente Maria Souza em 2026", "Maria Souza"),
+                            ("Nome: Maria Souza em 2026", "Maria Souza")]:
+        a = _por_categoria(texto)
+        assert esperado in a["pessoa"], (texto, a)
+    # a palavra anterior precisa estar no início da linha ou depois de pontuação
+    a = _por_categoria("Foi Zuleiva Maria Souza quem veio.")
+    assert "Maria Souza" in a["pessoa"] and "Zuleiva Maria Souza" not in a["pessoa"], a
+
+
+def test_ancora_titular():
+    a = _por_categoria("Titular: Zuleiva Fernandes Lima, CPF 111.444.777-35")
+    assert "Zuleiva Fernandes Lima" in a["pessoa"], a
+    # sem qualificação depois e fora do léxico: só a âncora acha
+    a = _por_categoria("Titular: Xandrelo Quintebor Vasques\nAgência 1234")
+    assert "Xandrelo Quintebor Vasques" in a["pessoa"], a
+    a = _por_categoria("Titular da conta: Xandrelo Quintebor Vasques\nAgência 1234")
+    assert "Xandrelo Quintebor Vasques" in a["pessoa"], a
+
+
 def test_duas_pessoas_ligadas_por_e_sao_dois_nomes():
     a = _por_categoria("Assinaram João Silva e Maria Souza o presente.")
     assert {"João Silva", "Maria Souza"} <= a["pessoa"], a
@@ -74,6 +127,88 @@ def test_inicial_do_meio_nao_corta_o_nome():
     assert "Maria da S. Pereira" in a["pessoa"], a
     a = _por_categoria("assinado por João C. Souza.")
     assert "João C. Souza" in a["pessoa"], a
+
+
+def test_nome_nao_continua_no_endereco_da_linha_seguinte():
+    for texto in ("Locador: Maria Souza\nRua das Flores, 100, Centro",
+                  "Locador: Maria Souza\nPraça da Sé, 100",
+                  "À Sra. Maria Souza\nRua Marechal Deodoro, 1500, apto 21",
+                  "Locador: Maria Souza\nVila Nova, 100", "Locador: Maria Souza\nJardim das Rosas, 100"):
+        oc = detectar(texto)
+        assert not any("\n" in o.valor for o in oc if o.categoria == "pessoa"), (texto, oc)
+        if "Rua" in texto:
+            assert any(o.categoria == "endereco" for o in oc), (texto, oc)
+
+
+def test_nome_que_cruza_o_endereco_e_cortado_antes_da_quebra():
+    # "Alameda" nao e' logradouro reconhecido como palavra de lugar aqui; o corte vem do identificador
+    oc = detectar("Locador: Maria Souza\nAvenida Getúlio Vargas, 1500")
+    assert any(o.categoria == "pessoa" and o.valor == "Maria Souza" for o in oc), oc
+    assert any(o.categoria == "endereco" and "1500" in o.valor for o in oc), oc
+
+
+def test_nome_que_esbarra_em_identificador_na_linha_de_baixo_volta_antes_da_quebra():
+    texto = "Locador: Maria Souza\nsilva@exemplo.com.br"
+    oc = detectar(texto)
+    assert any(o.categoria == "pessoa" and o.valor == "Maria Souza" for o in oc), oc
+    assert any(o.categoria == "email" and o.valor == "silva@exemplo.com.br" for o in oc), oc
+
+
+def test_lista_de_nomes_um_por_linha_nao_vira_uma_pessoa():
+    a = _por_categoria("Testemunhas:\nMaria Souza\nCarlos Pereira\nAna Lima")
+    assert {"Maria Souza", "Carlos Pereira", "Ana Lima"} <= a["pessoa"], a
+
+
+def test_continuacao_depois_da_quebra_so_com_sobrenome():
+    a = _por_categoria("Titular: Zuleiva Maria\nFernandes Lima, inscrita no CPF 111.444.777-35.")
+    assert "Zuleiva Maria\nFernandes Lima" in a["pessoa"], a
+
+
+def test_espaco_antes_da_quebra_nao_impede_a_continuacao():
+    a = _por_categoria("Titular: Xandrelo Quintebor \nFernandes, inscrito no CPF 111.444.777-35.")
+    assert any(v.replace(" \n", "\n") == "Xandrelo Quintebor\nFernandes" for v in a["pessoa"]), a
+
+
+def test_sem_entre_linhas_nunca_atravessa_a_quebra():
+    for texto in ("Titular: Zuleiva Maria\nFernandes, inscrita no CPF 111.444.777-35.",
+                  "Assinado por Maria\nSouza em 2026."):
+        oc = detectar(texto, entre_linhas=False)
+        assert not any("\n" in o.valor for o in oc), oc
+
+
+def test_qualificacao_e_prenome_sozinho_atravessam_a_quebra():
+    a = _por_categoria("neste ato a Sra. Zuleiva Maria\nFernandes, brasileira, solteira.")
+    assert "Zuleiva Maria\nFernandes" in a["pessoa"], a
+    a = _por_categoria("em favor de Maria\nFernandes, inscrita no CPF 111.444.777-35.")
+    assert any("Maria\nFernandes" in v for v in a["pessoa"]), a
+
+
+def test_prenome_antes_do_nome_em_outras_formas_de_linha():
+    for texto in ("______ Zuleiva Maria Souza\nCPF: 111.444.777-35",
+                  "1. Zuleiva Maria Souza\n2. Carlos Pereira",
+                  "- Zuleiva Maria Souza\n- Carlos Pereira",
+                  "Testemunha 2 Zuleiva Maria Souza\nCPF: 111.444.777-35",
+                  "Zuleiva Maria Souza.\nOutra linha.",
+                  "Zuleiva Maria Souza - CPF 111.444.777-35",
+                  "Testemunha 1; CPF  Zuleiva Maria Souza"):
+        a = _por_categoria(texto)
+        assert "Zuleiva Maria Souza" in a["pessoa"], (texto, a)
+
+
+def test_cargos_e_lugares_novos_nao_sao_absorvidos():
+    for texto in ("Tabeliã Maria Souza\n", "Escrivão Maria Souza\n", "Professora Maria Souza\n",
+                  "Vila Maria Souza\n", "Corretor Maria Souza\n", "Interessada Maria Souza\n"):
+        a = _por_categoria(texto)
+        assert a["pessoa"] == {"Maria Souza"}, (texto, a)
+
+
+def test_palavra_de_papel_ou_fecho_nao_e_absorvida():
+    for texto in ("O Exequente Maria Souza.", "Prezada Maria Souza,", "Atenciosamente,\nMaria Souza",
+                  "Assinou Maria Souza\nem 2026", "Presidente Maria Souza\n", "Relatora Maria Souza\n",
+                  "Escola Maria Souza\n", "Hospital Maria Souza\n", "Vila Maria Souza\n",
+                  "Fazenda Maria Souza\n", "Edifício Maria Souza\n"):
+        a = _por_categoria(texto)
+        assert a["pessoa"] == {"Maria Souza"}, (texto, a)
 
 
 if __name__ == "__main__":

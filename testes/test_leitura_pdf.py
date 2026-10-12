@@ -102,6 +102,63 @@ def test_imagem_minuscula_nao_passa_pelo_ocr():
     assert d.paginas_ocr == [] and not d.avisos
 
 
+def _pdf_nome_na_virada(caminho):
+    """Duas páginas: o nome do titular começa na última linha do corpo da página 1
+    e termina na primeira da página 2. Na página 1 o fluxo do PDF traz a linha do
+    nome ANTES de outro bloco do corpo e do rodapé (como nos PDFs reais)."""
+    doc = fitz.open()
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((72, 700), "Titular: Zuleiva Maria", fontname="helv", fontsize=11)
+    p1.insert_text((72, 120), "Cláusula primeira do contrato sintético de teste.", fontname="helv", fontsize=11)
+    p1.insert_text((72, 820), "Página 1 de 2", fontname="helv", fontsize=9)
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((72, 100), "Fernandes, inscrita no CPF 111.444.777-35.", fontname="helv", fontsize=11)
+    p2.insert_text((72, 820), "Página 2 de 2", fontname="helv", fontsize=9)
+    doc.save(str(caminho))
+    return caminho
+
+
+def test_ordem_de_leitura_junta_o_nome_da_virada_de_pagina():
+    d = ler_pdf(_pdf_nome_na_virada(F.pasta_temporaria("leitura_pdf10") / "v.pdf"))
+    assert "Zuleiva Maria\nFernandes" in d.texto, repr(d.texto)
+    assert len(d.origens) == len(d.texto)
+
+
+def test_rodape_vai_para_o_fim_do_texto_e_mantem_a_origem():
+    d = ler_pdf(_pdf_nome_na_virada(F.pasta_temporaria("leitura_pdf11") / "v.pdf"))
+    t = d.texto
+    assert t.index("Página 1 de 2") > t.index("Fernandes") and t.index("Página 2 de 2") > t.index("Fernandes"), repr(t)
+    assert t.index("Página 1 de 2") < t.index("Página 2 de 2")
+    assert t.index("Cláusula primeira") < t.index("Titular")  # corpo em ordem de leitura
+    o = d.origens[t.index("Página 1 de 2")]
+    assert isinstance(o, OrigemPdf) and o.pagina == 0 and o.rect[1] > 790
+    o = d.origens[t.index("Página 2 de 2")]
+    assert o.pagina == 1
+
+
+def test_cabecalho_baixo_selo_vertical_e_cabecalho_repetido_nao_ficam_entre_as_paginas():
+    caminho = F.pasta_temporaria("leitura_pdf12") / "m.pdf"
+    doc = fitz.open()
+    f = dict(fontname="helv", fontsize=11)
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((72, 60), "Cabeçalho Baixo Sintético", **f)                       # baseline ~60 pt (7%)
+    p1.insert_text((72, 110), "Contrato Sintético de Prestação de Serviços", **f)    # repete na página 2, na faixa de cima (15%)
+    p1.insert_text((72, 700), "Titular: Zuleiva Maria", **f)
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((72, 60), "Cabeçalho Baixo Sintético", **f)
+    p2.insert_text((72, 110), "Contrato Sintético de Prestação de Serviços", **f)
+    p2.insert_text((300, 400), "Selo vertical no meio", rotate=90, **f)               # linha não horizontal
+    p2.insert_text((18, 500), "Selo na margem lateral", rotate=90, **f)
+    p2.insert_text((72, 300), "Fernandes, inscrita no CPF 111.444.777-35.", **f)
+    doc.save(str(caminho))
+    t = ler_pdf(caminho).texto
+    assert "Zuleiva Maria\nFernandes" in t, repr(t)
+    depois = t.index("Fernandes")
+    for lixo in ("Cabeçalho Baixo Sintético", "Selo vertical no meio", "Selo na margem lateral",
+                 "Contrato Sintético de Prestação"):
+        assert lixo in t and t.index(lixo) > depois, (lixo, t)
+
+
 def test_pdf_com_senha_levanta_erro():
     caminho = F.pasta_temporaria("leitura_pdf7") / "s.pdf"
     doc = fitz.open()

@@ -2,7 +2,8 @@
 # Termo adicional (AGPL-3.0, seção 7(b)): preservar os avisos de autoria; ver CREDITOS.md.
 """Leitura de PDF: caractere a caractere, com o retângulo de cada um. Linhas
 do mesmo bloco se juntam com espaço (o nome quebrado no fim da linha continua
-um nome); blocos se separam com quebra de linha."""
+um nome); blocos se separam com quebra de linha. O texto segue a ordem de
+leitura de cada página; cabeçalhos e rodapés (faixa de margem) vão para o fim."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,30 +28,111 @@ def _abrir(caminho: Path):
     return pdf
 
 
-def _caracteres(pagina, n: int, partes: list[str], origens: list) -> None:
-    for bloco in pagina.get_text("rawdict", flags=FLAGS)["blocks"]:
+# Margem da página: cabeçalho, rodapé, selo de assinatura eletrônica e número de página não ficam entre o
+# fim de uma página e o começo da seguinte (um nome que vira a página seria cortado); saem do fluxo do
+# corpo e vão para o fim do texto. É margem: a faixa de cima e de baixo (8%), a lateral (6%), a linha que
+# não é horizontal (selo vertical) e a linha sem dígitos que se repete na mesma altura em 2+ páginas
+# (cabeçalho). `sort=True` põe cada página em ordem de leitura, mas pode reordenar páginas de duas colunas.
+MARGEM_VERTICAL = 0.08
+MARGEM_LATERAL = 0.06
+TOLERANCIA_REPETIDA = 10.0   # pontos
+FAIXA_DO_CABECALHO = 0.15    # a repetição só vale em cima e embaixo da página
+
+
+def _na_margem(rect, largura: float, altura: float) -> bool:
+    x0, y0, x1, y1 = rect
+    return (y1 < altura * MARGEM_VERTICAL or y0 > altura * (1 - MARGEM_VERTICAL)
+            or x1 < largura * MARGEM_LATERAL or x0 > largura * (1 - MARGEM_LATERAL))
+
+
+def _horizontal(pagina, linha) -> bool:
+    if pagina.rotation:
+        return True
+    dx, dy = linha.get("dir", (1, 0))
+    return abs(dx - 1) < 0.05 and abs(dy) < 0.05
+
+
+def _chave_de_repeticao(texto: str):
+    t = " ".join(texto.split()).lower()
+    return t if t and not any(c.isdigit() for c in t) else None
+
+
+def _linhas_repetidas(pdf) -> dict:
+    """texto sem dígitos -> [(página, y do meio)] das linhas que aparecem em 2+ páginas na mesma altura."""
+    achados: dict = {}
+    for n, pagina in enumerate(pdf):
+        for bloco in pagina.get_text("rawdict", flags=FLAGS)["blocks"]:
+            if bloco.get("type") != 0:
+                continue
+            for linha in bloco["lines"]:
+                chave = _chave_de_repeticao("".join(ch["c"] for sp in linha["spans"] for ch in sp["chars"]))
+                if chave:
+                    achados.setdefault(chave, []).append((n, (linha["bbox"][1] + linha["bbox"][3]) / 2))
+    return {c: v for c, v in achados.items() if len({p for p, _ in v}) > 1}
+
+
+def _repete(repetidas: dict, texto: str, n: int, rect, altura: float) -> bool:
+    """Cabeçalho/rodapé repetido: só na faixa larga de cima ou de baixo (15%) e nunca a linha que é rótulo de
+    formulário ("Titular:", "Testemunha 1 -"), que repete na página toda e ancora o nome de baixo."""
+    y = (rect[1] + rect[3]) / 2
+    if not (rect[3] < altura * FAIXA_DO_CABECALHO or rect[1] > altura * (1 - FAIXA_DO_CABECALHO)):
+        return False
+    if texto.rstrip().endswith((":", "-", "–", "—")):
+        return False
+    chave = _chave_de_repeticao(texto)
+    return bool(chave) and any(p != n and abs(yy - y) <= TOLERANCIA_REPETIDA for p, yy in repetidas.get(chave, ()))
+
+
+class _Margens:
+    """Linhas de margem de todas as páginas, na ordem em que apareceram."""
+
+    def __init__(self) -> None:
+        self.partes: list[str] = []
+        self.origens: list = []
+
+    def linha(self, caracteres) -> None:
+        for c, origem in caracteres:
+            self.partes.append(c); self.origens.append(origem)
+        self.partes.append("\n"); self.origens.append(None)
+
+
+def _caracteres(pagina, n: int, partes: list[str], origens: list, margens: _Margens, repetidas: dict) -> None:
+    largura, altura = pagina.rect.width, pagina.rect.height
+    for bloco in pagina.get_text("rawdict", flags=FLAGS, sort=True)["blocks"]:
         if bloco.get("type") != 0:
             continue
-        for k, linha in enumerate(bloco["lines"]):
+        k = 0
+        for linha in bloco["lines"]:
+            chars = [(ch["c"], OrigemPdf(n, tuple(ch["bbox"]), False))
+                     for span in linha["spans"] for ch in span["chars"]]
+            if (_na_margem(linha["bbox"], largura, altura) or not _horizontal(pagina, linha)
+                    or _repete(repetidas, "".join(c for c, _ in chars), n, linha["bbox"], altura)):
+                margens.linha(chars)
+                continue
             if k:
                 partes.append(" "); origens.append(None)
-            for span in linha["spans"]:
-                for ch in span["chars"]:
-                    partes.append(ch["c"])
-                    origens.append(OrigemPdf(n, tuple(ch["bbox"]), False))
-        partes.append("\n"); origens.append(None)
+            k += 1
+            for c, o in chars:
+                partes.append(c); origens.append(o)
+        if k:
+            partes.append("\n"); origens.append(None)
 
 
-def _linhas_ocr(n: int, linhas, partes: list[str], origens: list) -> None:
+def _linhas_ocr(n: int, linhas, partes: list[str], origens: list, margens: _Margens,
+                largura: float, altura: float) -> None:
     """Cada linha do OCR: a posição de cada caractere é estimada dividindo a
-    caixa da linha em partes iguais."""
+    caixa da linha em partes iguais. A margem vale pela caixa da linha."""
     for texto, rect in linhas:
         if not texto:
             continue
-        largura = (rect.x1 - rect.x0) / len(texto)
-        for i, c in enumerate(texto):
-            partes.append(c)
-            origens.append(OrigemPdf(n, (rect.x0 + largura * i, rect.y0, rect.x0 + largura * (i + 1), rect.y1), True))
+        passo = (rect.x1 - rect.x0) / len(texto)
+        chars = [(c, OrigemPdf(n, (rect.x0 + passo * i, rect.y0, rect.x0 + passo * (i + 1), rect.y1), True))
+                 for i, c in enumerate(texto)]
+        if _na_margem((rect.x0, rect.y0, rect.x1, rect.y1), largura, altura):
+            margens.linha(chars)
+            continue
+        for c, o in chars:
+            partes.append(c); origens.append(o)
         partes.append("\n"); origens.append(None)
 
 
@@ -89,12 +171,14 @@ def ler_pdf(caminho: Path, ocr=None) -> Documento:
     origens: list = []
     avisos: list[str] = []
     paginas_ocr: list[int] = []
+    margens = _Margens()
     com_nativo = 0
     try:
+        repetidas = _linhas_repetidas(pdf) if len(pdf) > 1 else {}
         for n, pagina in enumerate(pdf):
             nativo = len(pagina.get_text("text", flags=FLAGS).strip())
             if nativo:
-                _caracteres(pagina, n, partes, origens)
+                _caracteres(pagina, n, partes, origens, margens, repetidas)
                 com_nativo += 1
             if not pagina.get_images():
                 continue
@@ -107,10 +191,12 @@ def ler_pdf(caminho: Path, ocr=None) -> Documento:
                 else:
                     avisos.append(f"página {n + 1} tem imagem que não foi lida por OCR")
                 continue
-            _linhas_ocr(n, ocr(pagina), partes, origens)
+            _linhas_ocr(n, ocr(pagina), partes, origens, margens, pagina.rect.width, pagina.rect.height)
             paginas_ocr.append(n)
     finally:
         pdf.close()
+    partes += margens.partes
+    origens += margens.origens
     if not paginas_ocr:
         tipo = "pdf_texto"
     else:
