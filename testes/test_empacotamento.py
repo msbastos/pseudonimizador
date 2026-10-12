@@ -631,6 +631,30 @@ def test_wsb_escapa_o_caminho_em_xml():
     xml.dom.minidom.parseString(texto)
 
 
+def test_readme_tem_instalacao_do_usuario_e_montagem_do_mantenedor():
+    texto = (RAIZ / "README.md").read_text(encoding="utf-8")
+    for exigido in ("## Instalação", "Releases", "Pseudonimizador-Setup.exe", "SmartScreen", "Mais informações",
+                    "Executar assim mesmo", "Pasta dos arquivos", "Windows 10", "sem administrador",
+                    "## Instalação para desenvolvimento", "## Montar o instalador", "empacotamento/construir.py",
+                    "empacotamento/README.md"):
+        assert exigido in texto, exigido
+
+
+def test_creditos_citam_o_empacotamento_do_ulpiano():
+    texto = (RAIZ / "CREDITOS.md").read_text(encoding="utf-8")
+    assert "## Empacotamento" in texto and "Ulpiano" in texto and "empacotamento/" in texto
+
+
+def test_notas_da_release_cobrem_requisitos_smartscreen_hash_e_limites():
+    from pseudonimizador import VERSAO
+    arquivo = RAIZ / "docs" / "release-notes" / f"v{VERSAO}.md"
+    texto = arquivo.read_text(encoding="utf-8")
+    for exigido in (f"v{VERSAO}", "Windows 10", "1809", "Windows 11", "64 bits", "administrador", "SmartScreen",
+                    "Executar assim mesmo", "SHA-256", "certutil", "SHA256SUMS.txt", "Limitações", "3%",
+                    "Praça", "Vila", "assinado", "nada sai do computador"):
+        assert exigido in texto, exigido
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())
