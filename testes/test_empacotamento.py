@@ -144,6 +144,217 @@ def test_python_embarcavel_tem_versao_url_e_hash():
     assert len(d["sha256"]) == 64 and int(d["sha256"], 16) > 0 and d["sha256"] != "0" * 64
 
 
+import io  # noqa: E402
+import sys  # noqa: E402
+import zipfile  # noqa: E402
+
+from empacotamento import construir  # noqa: E402
+
+
+def _zip_python_falso() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("python.exe", b"MZ")
+        z.writestr("pythonw.exe", b"MZ")
+        z.writestr("python314.dll", b"MZ")
+        z.writestr("python314._pth", "python314.zip\n.\n#import site\n")
+    return buf.getvalue()
+
+
+def _repo_falso(tmp: Path, *, icone: bool = True) -> Path:
+    raiz = tmp / "repo"
+    for c in ("LICENSE", "CREDITOS.md", "README.md", "pseudonimizador/__init__.py", "pseudonimizador/web/estatico/app.js",
+              "requirements.lock", "testes/test_x.py", "saida_testes/x.docx"):
+        (raiz / c).parent.mkdir(parents=True, exist_ok=True)
+        (raiz / c).write_text("x", encoding="utf-8")
+    (raiz / "pseudonimizador" / "__init__.py").write_text('VERSAO = "0.2.0"\n', encoding="utf-8")
+    (raiz / "empacotamento").mkdir()
+    (raiz / "empacotamento" / "python-embarcavel.toml").write_text(
+        'versao = "3.14.0"\nurl = "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip"\n'
+        'sha256 = "' + "0" * 64 + '"\n', encoding="utf-8")
+    if icone:
+        (raiz / "empacotamento" / "pseudonimizador.ico").write_bytes(b"\x00\x00\x01\x00")
+    return raiz
+
+
+def test_pth_poe_o_app_e_o_site_packages_no_caminho():
+    linhas = construir.conteudo_pth().splitlines()
+    assert linhas == ["python314.zip", ".", "..", "Lib\\site-packages"]
+    assert "import site" not in construir.conteudo_pth()   # senão entra o site-packages do usuário no sys.path
+
+
+def test_pip_instala_do_lock_com_hashes_sem_dependencias():
+    args = construir.argumentos_pip(Path("requirements.lock"), Path("build/app/python/Lib/site-packages"))
+    assert args[:4] == [sys.executable, "-m", "pip", "install"]
+    for flag in ("--no-deps", "--require-hashes", "--only-binary=:all:", "--python-version", "3.14", "--platform",
+                 "win_amd64", "--implementation", "cp", "--abi", "cp314", "--target"):
+        assert flag in args, flag
+    assert args[args.index("-r") + 1] == "requirements.lock"
+
+
+def test_crt_app_local_tem_as_dlls_do_onnxruntime():
+    with tempfile.TemporaryDirectory() as d:
+        assert {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140_1.dll"} <= set(construir.nomes_do_crt())
+        vazia, cheia = Path(d) / "a", Path(d) / "b"
+        cheia.mkdir()
+        for n in construir.nomes_do_crt():
+            (cheia / n).write_bytes(b"MZ")
+        assert construir.localizar_crt([vazia, cheia]) == cheia and construir.localizar_crt([vazia]) is None
+
+
+def test_crt_do_system32_so_com_a_flag_explicita():
+    assert not any(p.name.lower() == "system32" for p in construir.candidatos_crt())
+    assert construir.candidatos_crt(sistema=True)[-1].name.lower() == "system32"
+    with tempfile.TemporaryDirectory() as d:
+        raiz = _repo_falso(Path(d))
+        original = construir.candidatos_crt
+        construir.candidatos_crt = lambda sistema=False: []
+        try:
+            construir.montar(raiz, Path(d) / "build", executar=lambda *a, **k: 0,
+                             baixar=lambda url, destino, sha: (destino.write_bytes(_zip_python_falso()), destino)[1],
+                             fumaca=False)
+        except SystemExit as e:
+            assert "--crt" in str(e) and "--crt-do-sistema" in str(e) and "não publique" in str(e), e
+        else:
+            raise AssertionError("sem CRT e sem a flag deveria falhar")
+        finally:
+            construir.candidatos_crt = original
+
+
+def test_montagem_com_comandos_falsos_produz_a_arvore():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        raiz = _repo_falso(tmp)
+        crt = tmp / "crt"
+        crt.mkdir()
+        for n in construir.nomes_do_crt():
+            (crt / n).write_bytes(b"MZ")
+        chamadas = []
+
+        def executar(args, **kw):
+            chamadas.append(list(args))
+            if "pip" in args:
+                Path(args[args.index("--target") + 1]).mkdir(parents=True, exist_ok=True)
+            return 0
+
+        def baixar(url, destino, sha256):
+            assert url.endswith("python-3.14.0-embed-amd64.zip") and destino.name == "python-3.14.0-embed-amd64.zip"
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_bytes(_zip_python_falso())
+            return destino
+        app = construir.montar(raiz, tmp / "build", executar=executar, baixar=baixar, crt=crt, fumaca=False)
+        assert app == tmp / "build" / "app"
+        assert (app / "python" / "python.exe").is_file() and (app / "python" / "msvcp140.dll").is_file()
+        assert (app / "python" / "python314._pth").read_text(encoding="utf-8") == construir.conteudo_pth()
+        assert (app / "python" / "Lib" / "site-packages").is_dir()
+        assert (app / "pseudonimizador" / "__init__.py").is_file() and (app / "LICENSE").is_file()
+        assert (app / "pseudonimizador.ico").is_file()
+        assert not (app / "requirements.lock").exists() and not (app / "testes").exists()
+        assert sum("pip" in c for c in chamadas) == 1 and not any("fumaca" in " ".join(c) for c in chamadas)
+
+
+def test_tamanho_do_zip_diferente_do_registrado_e_recusado():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        raiz = _repo_falso(tmp)
+        toml = raiz / "empacotamento" / "python-embarcavel.toml"
+        toml.write_text(toml.read_text(encoding="utf-8") + "tamanho = 1\n", encoding="utf-8")
+        crt = tmp / "crt"
+        crt.mkdir()
+        for n in construir.nomes_do_crt():
+            (crt / n).write_bytes(b"MZ")
+        try:
+            construir.montar(raiz, tmp / "build", executar=lambda *a, **k: 0, crt=crt, fumaca=False,
+                             baixar=lambda url, destino, sha: (destino.parent.mkdir(parents=True, exist_ok=True),
+                                                               destino.write_bytes(_zip_python_falso()), destino)[2])
+        except SystemExit as e:
+            assert "tamanho" in str(e)
+        else:
+            raise AssertionError("tamanho diferente deveria dar SystemExit")
+
+
+class _RespostaFalsa:
+    def __init__(self, dados: bytes):
+        self._dados = dados
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._dados
+
+
+def _com_urlopen_falso(resposta: bytes, fn):
+    chamadas = []
+    original = construir.urllib.request.urlopen
+
+    def falso(url, timeout=None):
+        chamadas.append(url)
+        return _RespostaFalsa(resposta)
+    construir.urllib.request.urlopen = falso
+    try:
+        fn(chamadas)
+    finally:
+        construir.urllib.request.urlopen = original
+
+
+def test_download_com_hash_errado_e_recusado_e_o_arquivo_removido():
+    import hashlib
+    with tempfile.TemporaryDirectory() as d:
+        destino = Path(d) / "_cache" / "python.zip"
+        esperado = hashlib.sha256(b"o zip oficial").hexdigest()
+
+        def corpo(chamadas):
+            try:
+                construir._baixar_padrao("https://www.python.org/x/python.zip", destino, esperado)
+            except SystemExit as e:
+                assert "não bate" in str(e) and esperado in str(e)
+            else:
+                raise AssertionError("hash errado deveria dar SystemExit")
+            assert chamadas == ["https://www.python.org/x/python.zip"] and not destino.exists()
+        _com_urlopen_falso(b"zip adulterado", corpo)
+
+
+def test_cache_com_o_hash_certo_nao_baixa_de_novo():
+    import hashlib
+    with tempfile.TemporaryDirectory() as d:
+        destino = Path(d) / "python.zip"
+        destino.write_bytes(b"o zip oficial")
+        esperado = hashlib.sha256(b"o zip oficial").hexdigest()
+
+        def corpo(chamadas):
+            assert construir._baixar_padrao("https://www.python.org/x/python.zip", destino, esperado) == destino
+            assert chamadas == []
+        _com_urlopen_falso(b"nao deveria ser lido", corpo)
+
+
+def test_python_embarcavel_sem_sha256_e_recusado():
+    with tempfile.TemporaryDirectory() as d:
+        toml = Path(d) / "python-embarcavel.toml"
+        toml.write_text('versao = "3.14.0"\nurl = "https://www.python.org/ftp/python/3.14.0/x.zip"\n', encoding="utf-8")
+        try:
+            construir.ler_python_embarcavel(toml)
+        except ValueError as e:
+            assert "sha256" in str(e)
+        else:
+            raise AssertionError("sem sha256 deveria dar ValueError")
+
+
+def test_argumentos_do_iscc_e_localizacao():
+    args = construir.argumentos_iscc(Path("C:/Inno/ISCC.exe"), Path("empacotamento/pseudonimizador.iss"),
+                                     versao="0.2.0", origem=Path("build/app"), saida=Path("dist"))
+    assert args[0].endswith("ISCC.exe") and "/DVersao=0.2.0" in args and args[-1].endswith("pseudonimizador.iss")
+    assert any(a.startswith("/DOrigem=") for a in args) and any(a.startswith("/O") for a in args)
+    with tempfile.TemporaryDirectory() as d:
+        falso = Path(d) / "ISCC.exe"
+        falso.write_bytes(b"MZ")
+        assert construir.localizar_iscc(falso) == falso
+        assert construir.localizar_iscc(Path(d) / "nao-existe.exe") is None
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

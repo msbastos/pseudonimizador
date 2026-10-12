@@ -5,3 +5,5 @@
 versao = "3.14.8"
 url = "https://www.python.org/ftp/python/3.14.8/python-3.14.8-embed-amd64.zip"
 sha256 = "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310"
+# Tamanho do zip em bytes: conferência barata além do hash (que é TOFU, vindo do download por HTTPS).
+tamanho = 12601679
