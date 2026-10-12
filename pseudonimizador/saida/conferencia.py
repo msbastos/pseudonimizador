@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import zipfile
+from urllib.parse import unquote
 from pathlib import Path
 
 from ..motor.mapa import normalizar
@@ -35,16 +36,30 @@ def valores_vigiados(mapa: dict, devolver_pulados: bool = False):
 
 
 _SEPARADORES = {"p", "tc", "tr", "br", "tab", "cr", "txbxContent"}
+_DML = "{http://schemas.openxmlformats.org/drawingml/"
 
 
 def _local(tag) -> str:
     return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
 
 
-def _texto_xml(dados: bytes) -> str:
-    """Texto de uma parte XML: runs do mesmo parágrafo colados; espaço em
-    quebra, tabulação e fim de parágrafo/célula/linha; todos os valores de
-    atributos (docVar, Target, descr, tooltips...) entram no texto."""
+def _com_decodificado(valores) -> list[str]:
+    """Cada valor como veio e, se tinha %XX, também decodificado."""
+    saida = []
+    for v in valores:
+        v = str(v)
+        saida.append(v)
+        d = unquote(v)
+        if d != v:
+            saida.append(d)
+    return saida
+
+
+def _texto_xml(dados: bytes) -> tuple[str, str]:
+    """(corpo, atributos) de uma parte XML. Corpo: runs do mesmo parágrafo
+    (w:p ou a:p) colados; espaço em quebra, tabulação e fim de
+    parágrafo/célula/linha. Atributos (docVar, Target, descr, tooltips...)
+    ficam à parte, também decodificados de %XX."""
     from lxml import etree
     try:
         raiz = etree.fromstring(dados, etree.XMLParser(resolve_entities=False, no_network=True, recover=True))
@@ -52,71 +67,88 @@ def _texto_xml(dados: bytes) -> str:
         raiz = None
     if raiz is None:
         import html
-        return html.unescape(re.sub(r"<[^>]+>", " ", dados.decode("utf-8", "replace")))
+        return html.unescape(re.sub(r"<[^>]+>", " ", dados.decode("utf-8", "replace"))), ""
     word = raiz.tag.startswith("{http://schemas.openxmlformats.org/wordprocessingml/")
-    partes: list[str] = []
+    atributos: list[str] = []
     for el in raiz.iter():
-        partes.extend(str(v) for v in el.attrib.values())
+        atributos.extend(el.attrib.values())
     saida: list[str] = []
 
-    def visitar(el):
+    def visitar(el, colado):
         nome = _local(el.tag)
-        if word and nome in _SEPARADORES:
+        dml = isinstance(el.tag, str) and el.tag.startswith(_DML)
+        if dml and nome == "p":
+            colado = True
+        sep = (word or dml) and nome in _SEPARADORES
+        if sep:
             saida.append(" ")
         if el.text and isinstance(el.tag, str):
-            saida.append(el.text if word else " " + el.text + " ")
+            saida.append(el.text if colado else " " + el.text + " ")
         for filho in el:
-            visitar(filho)
+            visitar(filho, colado)
             if filho.tail:
-                saida.append(filho.tail if word else " " + filho.tail + " ")
-        if word and nome in _SEPARADORES:
+                saida.append(filho.tail if colado else " " + filho.tail + " ")
+        if sep:
             saida.append(" ")
 
-    visitar(raiz)
-    return "".join(saida) + " " + " ".join(partes)
+    visitar(raiz, word)
+    return "".join(saida), " ".join(_com_decodificado(atributos))
 
 
-def _texto_docx(caminho: Path) -> str:
+def _texto_docx(caminho: Path) -> tuple[str, str]:
+    corpo, attrs = [], []
     with zipfile.ZipFile(caminho) as z:
-        partes = [_texto_xml(z.read(n)) for n in z.namelist() if n.endswith((".xml", ".rels"))]
-    return " ".join(partes)
+        for n in z.namelist():
+            if n.endswith((".xml", ".rels")):
+                c, a = _texto_xml(z.read(n))
+                corpo.append(c)
+                attrs.append(a)
+    return " ".join(corpo), " ".join(attrs)
 
 
-def _texto_pdf(caminho: Path, paginas_ocr) -> str:
+def _texto_pdf(caminho: Path, paginas_ocr) -> tuple[str, str]:
     import fitz
     from ..leitura.ocr import ocr_pagina
-    partes = []
+    corpo, extras = [], []
     with fitz.open(str(caminho)) as pdf:
-        partes.extend(str(v) for v in pdf.metadata.values() if v)
-        partes.append(pdf.get_xml_metadata() or "")
-        partes.extend(str(t) for _, t, *_ in pdf.get_toc(simple=False) or [])
+        extras.extend(str(v) for v in pdf.metadata.values() if v)
+        extras.append(pdf.get_xml_metadata() or "")
+        extras.extend(str(t) for _, t, *_ in pdf.get_toc(simple=False) or [])
         for nome in pdf.embfile_names():
-            partes.append(nome)
-            partes.extend(str(v) for v in pdf.embfile_info(nome).values() if v)
+            extras.append(nome)
+            extras.extend(str(v) for v in pdf.embfile_info(nome).values() if v)
         for n, pagina in enumerate(pdf):
-            partes.append(pagina.get_text())
+            corpo.append(pagina.get_text())
             for anot in pagina.annots() or []:
-                partes.extend(str(v) for v in anot.info.values() if v)
+                extras.extend(str(v) for v in anot.info.values() if v)
             for campo in pagina.widgets() or []:
-                partes.extend(str(v) for v in (campo.field_name, campo.field_value, campo.field_label) if v)
-            partes.extend(str(l["uri"]) for l in pagina.get_links() if l.get("uri"))
+                extras.extend(str(v) for v in (campo.field_name, campo.field_value, campo.field_label) if v)
+            extras.extend(str(l["uri"]) for l in pagina.get_links() if l.get("uri"))
             if n in paginas_ocr:
-                partes.extend(t for t, _ in ocr_pagina(pagina))
-    return " ".join(partes)
+                corpo.extend(t for t, _ in ocr_pagina(pagina))
+    return " ".join(corpo), " ".join(_com_decodificado(extras))
 
 
 def conferir(caminho: Path, mapa: dict, paginas_ocr=()) -> list[str]:
     caminho = Path(caminho)
-    bruto = _texto_docx(caminho) if caminho.suffix.lower() == ".docx" else _texto_pdf(caminho, set(paginas_ocr))
-    texto = normalizar(bruto)
-    compacto = re.sub(r"[\W_]+", "", texto)
+    corpo, extras = _texto_docx(caminho) if caminho.suffix.lower() == ".docx" else _texto_pdf(caminho, set(paginas_ocr))
+    fontes = []
+    for bruto in (corpo, extras):  # nunca concatenados: a rede de segurança não cruza a fronteira
+        texto = normalizar(bruto)
+        fontes.append((texto, re.sub(r"[\W_]+", "", texto)))
     achados = []
     for v in valores_vigiados(mapa):
         alvo = normalizar(v)
-        if re.search(r"(?<!\w)" + re.escape(alvo) + r"(?!\w)", texto):
-            achados.append(v)
-            continue
         sem = re.sub(r"[\W_]+", "", alvo)
-        if len(sem) >= 8 and sem in compacto:
-            achados.append(v)
+        for texto, compacto in fontes:
+            if re.search(r"(?<!\w)" + re.escape(alvo) + r"(?!\w)", texto):
+                achou = True
+            elif len(sem) >= 8:
+                borda = (r"(?<!\d)", r"(?!\d)") if sem.isdigit() else ("", "")
+                achou = bool(re.search(borda[0] + re.escape(sem) + borda[1], compacto))
+            else:
+                achou = False
+            if achou:
+                achados.append(v)
+                break
     return achados

@@ -4,9 +4,12 @@
 PDF) e modo (reversível ou definitivo), com conferência ao final."""
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..motor.mapa import normalizar
 from ..motor.trocas import aplicar_trocas
 from . import mapas
 from .conferencia import VazamentoDetectado, conferir, valores_vigiados  # noqa: F401
@@ -19,6 +22,19 @@ class Gerado:
     saida: Path
     mapa: Path | None
     avisos: list[str] = field(default_factory=list)
+
+
+def _base_anonima(stem: str, mapa: dict) -> str:
+    """Nome do arquivo de entrada sem os valores do mapa: cada um vira o seu
+    tóken sem colchetes (mais longos primeiro, sem caixa nem acento)."""
+    pares = sorted(((normalizar(i.get("valor") or ""), tok.strip("[]"))
+                    for tok, i in mapa.get("tokens", {}).items() if len(normalizar(i.get("valor") or "")) >= 2),
+                   key=lambda p: -len(p[0]))
+    # normalizar remove acentos combinando; o stem é comparado letra a letra sem acento
+    plano = "".join(c for c in unicodedata.normalize("NFD", stem) if not unicodedata.combining(c))
+    for valor, rotulo in pares:
+        plano = re.sub(re.escape(valor).replace(r"\ ", r"\s+"), rotulo, plano, flags=re.IGNORECASE)
+    return plano.strip()
 
 
 def _destino(pasta: Path, base: str, sufixo: str) -> Path:
@@ -44,7 +60,7 @@ def gerar(documento, resultado, *, formato: str, modo: str, pasta_saida: Path, p
         raise ValueError("a pasta dos mapas não pode ser a da saída nem ficar dentro dela (ou vice-versa)")
     pasta_saida.mkdir(parents=True, exist_ok=True)
     rotulo = "pseudonimizado" if modo == "reversivel" else "anonimizado"
-    destino = _destino(pasta_saida, f"{Path(documento.caminho).stem} - {rotulo}", f".{tipo}")
+    destino = _destino(pasta_saida, f"{_base_anonima(Path(documento.caminho).stem, resultado.mapa)} - {rotulo}", f".{tipo}")
     identificador = mapas.novo_id(Path(documento.caminho).stem) if modo == "reversivel" else ""
     avisos = list(documento.avisos)
 

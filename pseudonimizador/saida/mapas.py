@@ -4,16 +4,17 @@
 from __future__ import annotations
 
 import json
-import re
+import secrets
 from datetime import datetime
 from pathlib import Path
 
 from ..motor.mapa import escrever_atomico
 
 
-def novo_id(nome_base: str) -> str:
-    seguro = re.sub(r"[^\w\-]+", "_", nome_base).strip("_")[:60] or "documento"
-    return f"{seguro}-{datetime.now():%Y%m%d-%H%M%S-%f}"
+def novo_id(nome_base: str = "") -> str:
+    """Identificador sem relação com o nome do arquivo de entrada (o nome pode
+    ser o de uma parte). `nome_base` é ignorado e só existe por compatibilidade."""
+    return f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(4)}"
 
 
 def gravar(pasta_mapas: Path, nome_base: str, mapa: dict, identificador: str | None = None) -> tuple[str, Path]:

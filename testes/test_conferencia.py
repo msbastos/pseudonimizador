@@ -92,6 +92,36 @@ def test_valores_curtos_listados():
     vigiados, pulados = valores_vigiados(mapa, devolver_pulados=True)
     assert vigiados == [F.PESSOA_1] and sorted(pulados) == ["123", "Acme", "Maria"]
 
+def test_cep_nao_casa_com_valor_em_reais():
+    corpo = "<w:p><w:r><w:t>Valor: R$ 10.131.010,00</w:t></w:r></w:p>"
+    assert _achou(corpo, _mapa(("cep", "01310-100"))) == []
+
+
+def test_cep_isolado_ainda_acusa():
+    assert _achou("<w:p><w:r><w:t>CEP 01310-100.</w:t></w:r></w:p>", _mapa(("cep", "01310-100"))) == ["01310-100"]
+
+
+def test_target_com_percent_encoding():
+    mapa = _mapa(("email", "fulano.exemplo@example.com"))
+    rels = ('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="r1" Type="x" Target="mailto:fulano.exemplo%40example.com" TargetMode="External"/></Relationships>')
+    assert _achou("<w:p/>", mapa, {"word/_rels/document.xml.rels": rels}) == ["fulano.exemplo@example.com"]
+
+
+def test_runs_de_paragrafo_drawingml():
+    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    parte = (f'<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="{A}">'
+             '<a:p><a:r><a:t>Ana Lu</a:t></a:r><a:r><a:t>z Carvalho</a:t></a:r></a:p></c:chartSpace>')
+    mapa = _mapa(("pessoa", "Ana Luz Carvalho"))
+    assert _achou("<w:p/>", mapa, {"word/charts/chart1.xml": parte}) == ["Ana Luz Carvalho"]
+
+
+def test_a_p_separa_paragrafos():
+    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    parte = (f'<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="{A}">'
+             '<a:p><a:r><a:t>Ana Luz</a:t></a:r></a:p><a:p><a:r><a:t>Carvalho</a:t></a:r></a:p></c:chartSpace>')
+    assert _achou("<w:p/>", _mapa(("pessoa", "Ana Luz Carvalho")), {"word/charts/chart1.xml": parte}) == ["Ana Luz Carvalho"]
+
 
 def _pdf_com_extras(nome):
     pasta = F.pasta_temporaria(nome)

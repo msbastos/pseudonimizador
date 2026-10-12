@@ -140,6 +140,27 @@ def test_gravar_nao_altera_o_mapa_do_chamador():
     assert "id" not in m
 
 
+
+def test_nome_do_arquivo_de_entrada_nao_vaza_no_id_nem_no_mapa():
+    pasta = F.pasta_temporaria("gerar_nome_parte")
+    doc = ler(F.contrato_docx(pasta / f"{F.PESSOA_1}.docx"))
+    g = gerar(doc, Revisao(doc).fechar(), formato="layout", modo="reversivel",
+              pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    import docx
+    ident = docx.Document(str(g.saida)).core_properties.identifier
+    assert "maria" not in ident.lower() and "maria" not in g.mapa.name.lower()
+    assert "maria" not in g.saida.name.lower()
+
+
+def test_nome_da_saida_troca_valores_do_mapa_por_token():
+    pasta = F.pasta_temporaria("gerar_nome_saida")
+    doc = ler(F.contrato_docx(pasta / f"Contrato {F.PESSOA_1.upper()}.docx"))
+    res = Revisao(doc).fechar()
+    g = gerar(doc, res, formato="layout", modo="definitivo", pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    token = next(t.strip("[]") for t, i in res.mapa["tokens"].items() if i["valor"] == F.PESSOA_1)
+    assert g.saida.name == f"Contrato {token} - anonimizado.docx", g.saida.name
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())
