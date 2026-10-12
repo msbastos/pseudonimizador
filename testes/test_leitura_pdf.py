@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Termo adicional (AGPL-3.0, seção 7(b)): preservar os avisos de autoria; ver CREDITOS.md.
 import _base  # noqa: F401
+import fitz
+
 import fabrica as F
-from pseudonimizador.leitura.modelo import OrigemPdf
+from pseudonimizador.leitura.modelo import ErroDeLeitura, OrigemPdf
 from pseudonimizador.leitura.pdf_ import ler_pdf
 
 
@@ -21,6 +23,72 @@ def test_escaneado_sem_ocr_gera_aviso():
     d = ler_pdf(F.contrato_escaneado(F.pasta_temporaria("leitura_pdf2") / "e.pdf"))
     assert d.texto.strip() == ""
     assert any("sem texto" in a for a in d.avisos)
+
+
+def _ocr_falso(pagina):
+    return [("Fulano Teste", fitz.Rect(50, 50, 200, 70))]
+
+
+def test_pagina_curta_sem_imagem_e_lida():
+    """Assinatura com só um nome: menos de MIN_CARACTERES, mas sem imagem, não pode sumir."""
+    caminho = F.pasta_temporaria("leitura_pdf3") / "a.pdf"
+    doc = fitz.open()
+    doc.new_page(width=595, height=842).insert_text((72, 72), "Ana Sá", fontname="helv", fontsize=11)
+    doc.save(str(caminho))
+    d = ler_pdf(caminho)
+    assert "Ana Sá" in d.texto
+    assert len(d.origens) == len(d.texto)
+    o = d.origens[d.texto.index("Ana Sá")]
+    assert isinstance(o, OrigemPdf) and o.pagina == 0 and not o.ocr
+
+
+def test_escaneado_com_ocr_falso_usa_ocr():
+    d = ler_pdf(F.contrato_escaneado(F.pasta_temporaria("leitura_pdf4") / "e.pdf"), ocr=_ocr_falso)
+    assert d.tipo == "pdf_ocr" and d.paginas_ocr == [0]
+    assert "Fulano Teste" in d.texto
+    assert d.origens[d.texto.index("F")].ocr is True
+
+
+def test_pagina_com_imagem_inteira_e_texto_nativo_faz_ocr_e_fica_misto():
+    caminho = F.pasta_temporaria("leitura_pdf5") / "m.pdf"
+    doc = fitz.open()
+    pagina = doc.new_page(width=595, height=842)
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 8, 8), False)
+    pix.set_rect(pix.irect, (240, 240, 240))
+    pagina.insert_image(pagina.rect, pixmap=pix)
+    pagina.insert_text((72, 72), "Texto nativo do documento de teste, com mais de vinte caracteres",
+                       fontname="helv", fontsize=11)
+    doc.save(str(caminho))
+    d = ler_pdf(caminho, ocr=_ocr_falso)
+    assert "Texto nativo do documento" in d.texto and "Fulano Teste" in d.texto
+    assert d.paginas_ocr == [0] and d.tipo == "pdf_misto"
+
+
+def test_imagem_grande_com_texto_sem_ocr_gera_aviso():
+    caminho = F.pasta_temporaria("leitura_pdf6") / "g.pdf"
+    doc = fitz.open()
+    pagina = doc.new_page(width=595, height=842)
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 8, 8), False)
+    pagina.insert_image(pagina.rect, pixmap=pix)
+    pagina.insert_text((72, 72), "Texto nativo do documento de teste, com mais de vinte caracteres",
+                       fontname="helv", fontsize=11)
+    doc.save(str(caminho))
+    d = ler_pdf(caminho)
+    assert d.paginas_ocr == []
+    assert any("não foi lida por OCR" in a for a in d.avisos)
+
+
+def test_pdf_com_senha_levanta_erro():
+    caminho = F.pasta_temporaria("leitura_pdf7") / "s.pdf"
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "Conteúdo protegido do documento de teste", fontname="helv")
+    doc.save(str(caminho), encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw="dono", user_pw="usuario")
+    try:
+        ler_pdf(caminho)
+    except ErroDeLeitura as e:
+        assert "senha" in str(e)
+    else:
+        raise AssertionError("PDF com senha deveria levantar ErroDeLeitura")
 
 
 if __name__ == "__main__":

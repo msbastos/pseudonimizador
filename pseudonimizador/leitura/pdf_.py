@@ -54,27 +54,59 @@ def _linhas_ocr(n: int, linhas, partes: list[str], origens: list) -> None:
         partes.append("\n"); origens.append(None)
 
 
+COBERTURA_IMAGEM = 0.5   # imagem que cobre tanto da página é digitalização do corpo
+
+
+def _cobertura(pagina) -> float:
+    """Fração da área da página coberta por imagens (soma, limitada a 1: na dúvida, OCR)."""
+    area = pagina.rect.get_area()
+    if area <= 0:
+        return 0.0
+    total = 0.0
+    for info in pagina.get_image_info():
+        total += (fitz.Rect(info["bbox"]) & pagina.rect).get_area()
+    return min(total / area, 1.0)
+
+
 def ler_pdf(caminho: Path, ocr=None) -> Documento:
+    """Lê o PDF caractere a caractere. Páginas sem imagem são lidas do texto
+    nativo, qualquer que seja o tamanho. Páginas com imagem que cobre metade
+    da página, ou com pouco texto nativo, passam pelo OCR quando ele é dado.
+
+    `ocr(pagina) -> list[tuple[str, fitz.Rect]]`: uma entrada por linha de texto,
+    com o retângulo em pontos do PDF, no mesmo sistema de coordenadas de
+    `page.get_text("rawdict")` (não em pixels do pixmap)."""
     caminho = Path(caminho)
     pdf = _abrir(caminho)
     partes: list[str] = []
     origens: list = []
     avisos: list[str] = []
     paginas_ocr: list[int] = []
-    com_texto = 0
+    com_nativo = 0
     try:
         for n, pagina in enumerate(pdf):
-            if len(pagina.get_text("text", flags=FLAGS).strip()) >= MIN_CARACTERES:
+            nativo = len(pagina.get_text("text", flags=FLAGS).strip())
+            if nativo:
                 _caracteres(pagina, n, partes, origens)
-                com_texto += 1
-            elif pagina.get_images():
-                if ocr is None:
+                com_nativo += 1
+            if not pagina.get_images():
+                continue
+            pouco_texto = nativo < MIN_CARACTERES
+            if not pouco_texto and _cobertura(pagina) < COBERTURA_IMAGEM:
+                continue
+            if ocr is None:
+                if pouco_texto:
                     avisos.append(f"página {n + 1} sem texto (imagem) não foi lida")
-                    continue
-                _linhas_ocr(n, ocr(pagina), partes, origens)
-                paginas_ocr.append(n)
+                else:
+                    avisos.append(f"página {n + 1} tem imagem que não foi lida por OCR")
+                continue
+            _linhas_ocr(n, ocr(pagina), partes, origens)
+            paginas_ocr.append(n)
     finally:
         pdf.close()
-    tipo = "pdf_texto" if not paginas_ocr else ("pdf_ocr" if not com_texto else "pdf_misto")
+    if not paginas_ocr:
+        tipo = "pdf_texto"
+    else:
+        tipo = "pdf_ocr" if not com_nativo else "pdf_misto"
     return Documento(caminho=caminho, tipo=tipo, texto="".join(partes), origens=origens,
                      avisos=avisos, paginas_ocr=paginas_ocr)
