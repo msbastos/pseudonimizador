@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Termo adicional (AGPL-3.0, seção 7(b)): preservar os avisos de autoria; ver CREDITOS.md.
-"""Linha de comando do Pseudonimizador (a janela vem no Plano 2).
+"""Linha de comando do Pseudonimizador. Sem subcomando, abre a janela.
 
+  (nada)                                abre a janela (servidor local + Edge)
   detectar  ARQ --revisao R.json        detecta e grava a revisão para editar
   gerar     ARQ [--revisao R.json] ...  aplica a revisão e gera a saída
   restaurar ARQ.docx|--texto T.txt ...  devolve os nomes (modo reversível)
@@ -101,8 +102,8 @@ def _restaurar(a) -> int:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="pseudonimizador", description=f"Pseudonimizador {VERSAO}")
-    sub = p.add_subparsers(dest="comando", required=True)
+    p = argparse.ArgumentParser(prog="pseudonimizador", description=f"Pseudonimizador {VERSAO} — sem subcomando, abre a janela")
+    sub = p.add_subparsers(dest="comando", required=False)
     d = sub.add_parser("detectar")
     d.add_argument("arquivo", type=Path)
     d.add_argument("--revisao", type=Path, required=True)
@@ -121,6 +122,9 @@ def main(argv=None) -> int:
     r.add_argument("--mapa", type=Path)
     r.add_argument("--mapas", type=Path, default=Path("Mapas"))
     a = p.parse_args(argv)
+    if a.comando is None:
+        from .web import abrir
+        return abrir.principal()
 
     from .leitura import ErroDeLeitura
     from .restaurar import TokenOrfao
