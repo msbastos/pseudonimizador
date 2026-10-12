@@ -76,6 +76,19 @@ def test_revisao_malformada_e_de_outro_arquivo():
     assert not (pasta / "S").exists()
 
 
+def test_sem_subcomando_abre_a_janela():
+    from pseudonimizador import __main__ as cli
+    from pseudonimizador.web import abrir as A
+    original = A.principal
+    A.principal = lambda: 7
+    try:
+        assert cli.main([]) == 7
+    finally:
+        A.principal = original
+    p = _cli("--help")
+    assert p.returncode == 0 and "detectar" in p.stdout and "janela" in p.stdout
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

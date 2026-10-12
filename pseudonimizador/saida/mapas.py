@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,17 @@ def carregar(caminho: Path) -> dict:
     return json.loads(Path(caminho).read_text(encoding="utf-8"))
 
 
+RE_ID = re.compile(r"[0-9A-Za-z_-]{1,80}")
+
+
 def achar(pasta_mapas: Path, identificador: str) -> Path | None:
-    caminho = Path(pasta_mapas) / f"{identificador}.json"
+    """O mapa de um identificador, só se este tiver o formato dos nossos ids
+    e o arquivo ficar dentro da pasta de mapas (o id pode vir de um DOCX
+    alheio: nada de `..` nem de caminho absoluto)."""
+    if not isinstance(identificador, str) or not RE_ID.fullmatch(identificador):
+        return None
+    pasta = Path(pasta_mapas)
+    caminho = pasta / f"{identificador}.json"
+    if caminho.resolve().parent != pasta.resolve():
+        return None
     return caminho if caminho.is_file() else None
