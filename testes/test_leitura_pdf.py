@@ -142,11 +142,11 @@ def test_cabecalho_baixo_selo_vertical_e_cabecalho_repetido_nao_ficam_entre_as_p
     f = dict(fontname="helv", fontsize=11)
     p1 = doc.new_page(width=595, height=842)
     p1.insert_text((72, 60), "Cabeçalho Baixo Sintético", **f)                       # baseline ~60 pt (7%)
-    p1.insert_text((72, 200), "Contrato Sintético de Prestação de Serviços", **f)    # repete na página 2, no corpo
+    p1.insert_text((72, 110), "Contrato Sintético de Prestação de Serviços", **f)    # repete na página 2, na faixa de cima (15%)
     p1.insert_text((72, 700), "Titular: Zuleiva Maria", **f)
     p2 = doc.new_page(width=595, height=842)
     p2.insert_text((72, 60), "Cabeçalho Baixo Sintético", **f)
-    p2.insert_text((72, 200), "Contrato Sintético de Prestação de Serviços", **f)
+    p2.insert_text((72, 110), "Contrato Sintético de Prestação de Serviços", **f)
     p2.insert_text((300, 400), "Selo vertical no meio", rotate=90, **f)               # linha não horizontal
     p2.insert_text((18, 500), "Selo na margem lateral", rotate=90, **f)
     p2.insert_text((72, 300), "Fernandes, inscrita no CPF 111.444.777-35.", **f)

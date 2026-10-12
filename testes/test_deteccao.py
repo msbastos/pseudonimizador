@@ -195,6 +195,13 @@ def test_prenome_antes_do_nome_em_outras_formas_de_linha():
         assert "Zuleiva Maria Souza" in a["pessoa"], (texto, a)
 
 
+def test_cargos_e_lugares_novos_nao_sao_absorvidos():
+    for texto in ("Tabeliã Maria Souza\n", "Escrivão Maria Souza\n", "Professora Maria Souza\n",
+                  "Vila Maria Souza\n", "Corretor Maria Souza\n", "Interessada Maria Souza\n"):
+        a = _por_categoria(texto)
+        assert a["pessoa"] == {"Maria Souza"}, (texto, a)
+
+
 def test_palavra_de_papel_ou_fecho_nao_e_absorvida():
     for texto in ("O Exequente Maria Souza.", "Prezada Maria Souza,", "Atenciosamente,\nMaria Souza",
                   "Assinou Maria Souza\nem 2026", "Presidente Maria Souza\n", "Relatora Maria Souza\n",

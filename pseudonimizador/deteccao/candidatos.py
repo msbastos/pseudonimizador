@@ -245,7 +245,9 @@ _ROTULOS = {"assinado", "assinada", "assinatura", "nome", "cliente", "clientes",
             "edificio", "fazenda", "vila", "colegio", "instituto", "universidade", "faculdade", "clinica",
             "sogro", "sogra", "tio", "tia", "avo", "neto", "neta", "irmao", "irma", "esposo", "esposa", "marido",
             "assinou", "atenciosamente", "cordialmente", "respeitosamente", "viuvo", "viuva", "herdeiro", "herdeira",
-            "inventariante", "juiz", "juiza", "promovente", "promovido", "promovida", "impetrante", "impetrado"}
+            "inventariante", "juiz", "juiza", "promovente", "promovido", "promovida", "impetrante", "impetrado",
+            "tabelia", "tabeliao", "oficiala", "oficial", "escrivao", "escriva", "professora", "professor",
+            "corretor", "corretora", "interessada", "interessado", "curador", "curadora", "ass"}
 # o que a palavra do papel, do fecho ou do verbo costuma terminar ("Presidente", "Atenciosamente", "Assinou",
 # "Assinaram", "Considerando", "Declaração", "Comunidade"); "-ia", "-ada" e "-al" ficam de fora (Zuleia, Zuleida)
 _FINS_DE_PALAVRA_COMUM = ("mente", "ante", "ente", "ou", "aram", "ndo", "ção", "dade")
@@ -269,7 +271,7 @@ def _comeca_em_rotulo_de_documento(texto: str) -> bool:
 
 def _palavra_da_lingua_ou_de_papel(w: str) -> bool:
     n = normalizar(w)
-    return (n in _PARADAS or n in CONECTIVOS or n in _NUNCA_NOME or n in _ROTULOS or n in _NUNCA_PRENOME_ISOLADO
+    return (n in _PARADAS or n in _LUGARES or n in CONECTIVOS or n in _NUNCA_NOME or n in _ROTULOS or n in _NUNCA_PRENOME_ISOLADO
             or n in _PULAVEIS_ANTES_DO_NOME or RE_ANCORA.match(w + ":") is not None
             or w.lower().endswith(_FINS_DE_PALAVRA_COMUM)
             or _parada(n, 0, frozenset(), TODA_A_LINGUA) == PARADA_FORTE)

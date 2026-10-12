@@ -126,6 +126,25 @@ def test_docx_com_nome_em_dois_paragrafos_restaura_igual_ao_original():
     assert ler(restaurado).texto == doc.texto
 
 
+def test_rotulo_repetido_em_formulario_de_varias_paginas_continua_ancorando_o_nome():
+    import fitz
+    from pseudonimizador.deteccao import detectar
+    pasta = F.pasta_temporaria("ponta_formulario")
+    caminho = pasta / "form.pdf"
+    doc = fitz.open()
+    f = dict(fontname="helv", fontsize=11)
+    for nome in ("Xandrelo Quintebor Vasques", "Ylmara Torquesi Bento"):
+        p = doc.new_page(width=595, height=842)
+        p.insert_text((72, 100), "Formulário de cadastro sintético", **f)
+        p.insert_text((72, 300), "Titular:", **f)
+        p.insert_text((72, 316), nome, **f)
+    doc.save(str(caminho))
+    lido = ler(caminho)
+    assert not any(o.categoria == "pessoa" and "Formulário" in o.valor for o in detectar(lido.texto)), lido.texto
+    texto = _gerar_layout_reversivel(caminho, pasta)
+    assert "Xandrelo" not in texto and "Quintebor" not in texto and "Ylmara" not in texto and "Torquesi" not in texto, texto
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

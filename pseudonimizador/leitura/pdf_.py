@@ -36,6 +36,7 @@ def _abrir(caminho: Path):
 MARGEM_VERTICAL = 0.08
 MARGEM_LATERAL = 0.06
 TOLERANCIA_REPETIDA = 10.0   # pontos
+FAIXA_DO_CABECALHO = 0.15    # a repetição só vale em cima e embaixo da página
 
 
 def _na_margem(rect, largura: float, altura: float) -> bool:
@@ -70,7 +71,14 @@ def _linhas_repetidas(pdf) -> dict:
     return {c: v for c, v in achados.items() if len({p for p, _ in v}) > 1}
 
 
-def _repete(repetidas: dict, texto: str, n: int, y: float) -> bool:
+def _repete(repetidas: dict, texto: str, n: int, rect, altura: float) -> bool:
+    """Cabeçalho/rodapé repetido: só na faixa larga de cima ou de baixo (15%) e nunca a linha que é rótulo de
+    formulário ("Titular:", "Testemunha 1 -"), que repete na página toda e ancora o nome de baixo."""
+    y = (rect[1] + rect[3]) / 2
+    if not (rect[3] < altura * FAIXA_DO_CABECALHO or rect[1] > altura * (1 - FAIXA_DO_CABECALHO)):
+        return False
+    if texto.rstrip().endswith((":", "-", "–", "—")):
+        return False
     chave = _chave_de_repeticao(texto)
     return bool(chave) and any(p != n and abs(yy - y) <= TOLERANCIA_REPETIDA for p, yy in repetidas.get(chave, ()))
 
@@ -97,9 +105,8 @@ def _caracteres(pagina, n: int, partes: list[str], origens: list, margens: _Marg
         for linha in bloco["lines"]:
             chars = [(ch["c"], OrigemPdf(n, tuple(ch["bbox"]), False))
                      for span in linha["spans"] for ch in span["chars"]]
-            y_meio = (linha["bbox"][1] + linha["bbox"][3]) / 2
             if (_na_margem(linha["bbox"], largura, altura) or not _horizontal(pagina, linha)
-                    or _repete(repetidas, "".join(c for c, _ in chars), n, y_meio)):
+                    or _repete(repetidas, "".join(c for c, _ in chars), n, linha["bbox"], altura)):
                 margens.linha(chars)
                 continue
             if k:
