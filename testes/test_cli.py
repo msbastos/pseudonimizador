@@ -2,6 +2,7 @@
 # Termo adicional (AGPL-3.0, seção 7(b)): preservar os avisos de autoria; ver CREDITOS.md.
 import _base  # noqa: F401
 import json
+import os
 import subprocess
 import sys
 
@@ -87,6 +88,52 @@ def test_sem_subcomando_abre_a_janela():
         A.principal = original
     p = _cli("--help")
     assert p.returncode == 0 and "detectar" in p.stdout and "janela" in p.stdout
+
+
+def _cli_estado(estado_dir, *args):
+    env = {**os.environ, "PSEUDONIMIZADOR_ESTADO": str(estado_dir)}
+    return subprocess.run([sys.executable, "-X", "utf8", "-m", "pseudonimizador", *map(str, args)],
+                          cwd=RAIZ, capture_output=True, text=True, encoding="utf-8", env=env)
+
+
+def test_configurar_grava_config_e_cria_pastas():
+    pasta = F.pasta_temporaria("cli_configurar")
+    estado_dir, base = pasta / "estado", pasta / "Arquivos"
+    p = _cli_estado(estado_dir, "configurar", "--pasta-base", base)
+    assert p.returncode == 0, p.stderr
+    cfg = json.loads((estado_dir / "config.json").read_text(encoding="utf-8"))
+    assert cfg["pasta_base"] == str(base) and cfg["formato"] == "layout" and cfg["modo"] == "reversivel"
+    for sub in ("Entrada", "Entrada/Processados", "Saida", "Mapas"):
+        assert (base / sub).is_dir(), sub
+    assert "configurar" in _cli("--help").stdout
+
+
+def test_configurar_preserva_os_outros_campos_e_recusa_caminho_relativo():
+    pasta = F.pasta_temporaria("cli_configurar2")
+    estado_dir = pasta / "estado"
+    estado_dir.mkdir()
+    (estado_dir / "config.json").write_text(json.dumps({"pasta_base": str(pasta / "A"), "formato": "texto",
+                                                         "tipo": "pdf", "modo": "definitivo"}), encoding="utf-8")
+    p = _cli_estado(estado_dir, "configurar", "--pasta-base", pasta / "B")
+    assert p.returncode == 0, p.stderr
+    cfg = json.loads((estado_dir / "config.json").read_text(encoding="utf-8"))
+    assert cfg["pasta_base"] == str(pasta / "B") and cfg["formato"] == "texto" and cfg["modo"] == "definitivo"
+    p = _cli_estado(estado_dir, "configurar", "--pasta-base", "Relativa")
+    assert p.returncode == 2 and "erro:" in p.stderr and "Traceback" not in p.stderr, p.stderr
+    assert json.loads((estado_dir / "config.json").read_text(encoding="utf-8"))["pasta_base"] == str(pasta / "B")
+
+
+def test_configurar_pasta_impossivel_nao_altera_a_config():
+    pasta = F.pasta_temporaria("cli_configurar3")
+    estado_dir = pasta / "estado"
+    p = _cli_estado(estado_dir, "configurar", "--pasta-base", pasta / "A")
+    assert p.returncode == 0, p.stderr
+    antes = (estado_dir / "config.json").read_bytes()
+    arquivo = pasta / "arquivo.txt"
+    arquivo.write_text("x", encoding="utf-8")
+    p = _cli_estado(estado_dir, "configurar", "--pasta-base", arquivo / "Sub")
+    assert p.returncode == 2 and "erro:" in p.stderr and "Traceback" not in p.stderr, p.stderr
+    assert (estado_dir / "config.json").read_bytes() == antes
 
 
 if __name__ == "__main__":

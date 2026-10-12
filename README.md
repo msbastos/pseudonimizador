@@ -12,6 +12,26 @@ Licença: AGPL-3.0-only.
 
 ## Instalação
 
+Baixe `Pseudonimizador-Setup.exe` (cerca de 105 MB) na página de Releases do
+repositório (`https://github.com/msbastos/pseudonimizador/releases/latest`) e
+execute-o. Requisitos: Windows 10 (1809 ou mais novo) ou Windows 11, 64 bits;
+instala só para o seu usuário, sem administrador e sem internet.
+
+- O instalador não é assinado digitalmente, então o Windows mostra o aviso
+  do SmartScreen ("O Windows protegeu o computador"): clique em
+  **Mais informações** e em **Executar assim mesmo**. Para conferir o arquivo,
+  compare `certutil -hashfile Pseudonimizador-Setup.exe SHA256` com o
+  `SHA256SUMS.txt` publicado junto.
+- A única pergunta é a **Pasta dos arquivos** (padrão
+  `Documentos\Pseudonimizador`), onde ficam `Entrada`, `Saida` e `Mapas`. O
+  instalador recusa uma pasta dentro da pasta do programa ou da pasta de
+  configurações.
+- Desinstalar (Configurações › Aplicativos) remove o programa e pergunta se
+  apaga também as configurações (a resposta padrão é não); a pasta dos
+  arquivos, com os mapas, nunca é apagada.
+
+## Instalação para desenvolvimento
+
     py -3.14 -m venv .venv
     .venv\Scripts\python -m pip install -r requirements.txt
 
@@ -64,6 +84,15 @@ Estado, configuração e log ficam em `%LOCALAPPDATA%\Pseudonimizador` (`config.
    Para texto colado (um `.txt` com os tókens), informe o mapa explicitamente:
 
        .venv\Scripts\python -X utf8 -m pseudonimizador restaurar --texto texto.txt --mapa Mapas\MAPA.json
+
+## Montar o instalador
+
+Para o mantenedor: `.venv\Scripts\python -X utf8 empacotamento/construir.py`
+monta `build\app` (Python 3.14 embarcável, bibliotecas do `requirements.lock`
+com hashes, CRT do Visual C++ app-local, código pelo manifesto), roda a fumaça
+no Python embarcado e compila `dist\Pseudonimizador-Setup.exe` com o Inno
+Setup 6. Pré-requisitos, aceitação no Windows Sandbox e conferência
+pré-publicação: `empacotamento/README.md`.
 
 ## Testes
 

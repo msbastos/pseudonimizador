@@ -61,6 +61,13 @@ class Config:
                 "processados": str(self.processados)}
 
 
+def _raiz_da_instalacao() -> Path | None:
+    """A pasta do programa instalado (a que o desinstalador apaga). Num clone do repositório
+    (desenvolvimento, testes) não há desinstalador: devolve None."""
+    raiz = Path(__file__).resolve().parents[1]
+    return None if (raiz / ".git").exists() else raiz
+
+
 def validar(dados: dict) -> Config:
     """Config a partir de um dicionário (o JSON do disco ou o corpo da tela).
     ValueError com a frase para o usuário. As regras que o `gerar` já aplica
@@ -90,6 +97,21 @@ def validar(dados: dict) -> Config:
         s, m, e = cfg.saida.resolve(), cfg.mapas.resolve(), cfg.entrada.resolve()
     except (OSError, ValueError, RuntimeError) as erro:
         raise ValueError(f"caminho inválido: {erro.strerror or erro}") from None
+    # O desinstalador apaga a pasta do programa e, se o usuário disser sim, a do estado: os arquivos
+    # do usuário nunca podem morar dentro delas.
+    try:
+        instalacao = _raiz_da_instalacao()
+        guardado = pasta_estado().resolve()
+        base_r = Path(cfg.pasta_base).resolve()
+    except (OSError, ValueError, RuntimeError) as erro:
+        raise ValueError(f"caminho inválido: {erro.strerror or erro}") from None
+    for rotulo, p in (("pasta base", base_r), ("pasta de saída", s), ("pasta dos mapas", m)):
+        for nome, protegida in (("da instalação do programa", instalacao), ("de estado do programa", guardado)):
+            if protegida is None:
+                continue
+            if p == protegida or protegida in p.parents:
+                raise ValueError(f"{rotulo}: não pode ser a pasta {nome} nem ficar dentro dela "
+                                 f"(o desinstalador apagaria seus arquivos); escolha outra, como Documentos")
     # A pasta vigiada (Entrada) não pode ver saídas e mapas como se fossem entradas.
     if any(x == e or x in e.parents or e in x.parents for x in (s, m)):
         raise ValueError("a saída e os mapas não podem ser a pasta Entrada nem ficar dentro dela (ou vice-versa)")

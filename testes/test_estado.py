@@ -117,6 +117,35 @@ def test_log_grava_na_pasta_de_estado():
     assert "evento 7" in texto and "INFO" in texto
 
 
+def test_validar_recusa_pastas_dentro_da_instalacao_ou_do_estado():
+    import pseudonimizador
+    raiz = Path(pseudonimizador.__file__).resolve().parents[1]
+    original = estado._raiz_da_instalacao
+    anterior = os.environ.get("PSEUDONIMIZADOR_ESTADO")
+    estado._raiz_da_instalacao = lambda: raiz          # o clone de desenvolvimento não conta como instalação
+    est = F.pasta_temporaria("estado_protegido")
+    os.environ["PSEUDONIMIZADOR_ESTADO"] = str(est)
+    try:
+        import tempfile
+        ok = Path(tempfile.mkdtemp())      # fora do clone, que aqui faz as vezes da instalação
+        assert validar({"pasta_base": str(ok / "Base")}).pasta_base
+        for campo in ("pasta_base", "pasta_saida", "pasta_mapas"):
+            for proibida in (raiz, raiz / "x" / "y", est, est / "Base"):
+                dados = {"pasta_base": str(ok / "Base"), campo: str(proibida)}
+                try:
+                    validar(dados)
+                except ValueError as e:
+                    assert "instalação" in str(e) or "estado" in str(e), str(e)
+                else:
+                    raise AssertionError((campo, proibida))
+    finally:
+        estado._raiz_da_instalacao = original
+        if anterior is None:
+            os.environ.pop("PSEUDONIMIZADOR_ESTADO", None)
+        else:
+            os.environ["PSEUDONIMIZADOR_ESTADO"] = anterior
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

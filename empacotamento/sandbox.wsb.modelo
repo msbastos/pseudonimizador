@@ -1,0 +1,13 @@
+<Configuration>
+  <VGpu>Enable</VGpu>
+  <Networking>Disable</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>{DIST}</HostFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>cmd /c start "" "%USERPROFILE%\Desktop\dist\Pseudonimizador-Setup.exe"</Command>
+  </LogonCommand>
+</Configuration>
