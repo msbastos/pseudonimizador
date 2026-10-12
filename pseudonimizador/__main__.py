@@ -35,12 +35,32 @@ def _detectar(a) -> int:
     return 0
 
 
+def _ler_revisao_json(caminho: Path, arquivo: Path) -> dict:
+    try:
+        dados = json.loads(Path(caminho).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"revisão inválida (JSON): {e}") from e
+    if not isinstance(dados, dict):
+        raise ValueError("revisão inválida: esperado um objeto JSON")
+    if dados.get("arquivo") and Path(dados["arquivo"]).name != Path(arquivo).name:
+        print("aviso: a revisão é de outro arquivo", file=sys.stderr)
+        raise ValueError(f"a revisão foi feita para {Path(dados['arquivo']).name}, não para {Path(arquivo).name}")
+    for i in dados.get("itens", []):
+        for campo in ("categoria", "valor", "aceito"):
+            if not isinstance(i, dict) or campo not in i:
+                raise ValueError(f"revisão inválida: item sem o campo '{campo}'")
+    for e in dados.get("acrescentar", []):
+        if not isinstance(e, dict) or "valor" not in e:
+            raise ValueError("revisão inválida: item de 'acrescentar' sem o campo 'valor'")
+    return dados
+
+
 def _gerar(a) -> int:
     from .motor.mapa import normalizar
     from .saida import gerar
+    dados = _ler_revisao_json(a.revisao, a.arquivo) if a.revisao else None
     rev = _revisao(a.arquivo)
-    if a.revisao:
-        dados = json.loads(Path(a.revisao).read_text(encoding="utf-8"))
+    if dados is not None:
         decisoes = {(i["categoria"], normalizar(i["valor"])): bool(i["aceito"]) for i in dados.get("itens", [])}
         for it in rev.itens:
             if it.chave in decisoes:
@@ -58,6 +78,10 @@ def _gerar(a) -> int:
 
 
 def _restaurar(a) -> int:
+    if (a.arquivo is None) == (a.texto is None):
+        raise ValueError("informe exatamente um entre ARQUIVO.docx e --texto")
+    if a.arquivo is not None and a.saida is None:
+        raise ValueError("--saida é obrigatório ao restaurar um DOCX")
     from .restaurar import mapa_do_docx, restaurar_docx, restaurar_texto
     from .saida import mapas
     if a.mapa:
@@ -103,7 +127,7 @@ def main(argv=None) -> int:
     from .saida import VazamentoDetectado
     try:
         return {"detectar": _detectar, "gerar": _gerar, "restaurar": _restaurar}[a.comando](a)
-    except (ErroDeLeitura, ValueError, KeyError) as e:
+    except (ErroDeLeitura, ValueError, OSError) as e:
         print(f"erro: {e}", file=sys.stderr)
         return 2
     except VazamentoDetectado as e:

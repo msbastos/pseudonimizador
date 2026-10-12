@@ -45,6 +45,37 @@ def test_erro_de_leitura_codigo_2():
     assert p.returncode == 2 and "formato não aceito" in p.stderr
 
 
+def test_restaurar_argumentos_invalidos():
+    pasta = F.pasta_temporaria("cli3")
+    p = _cli("restaurar", "--mapas", pasta / "M")
+    assert p.returncode == 2 and "erro:" in p.stderr, p.stderr
+    p = _cli("restaurar", pasta / "x.docx", "--mapas", pasta / "M")
+    assert p.returncode == 2 and "erro:" in p.stderr, p.stderr
+    p = _cli("restaurar", pasta / "x.docx", "--texto", pasta / "t.txt", "--saida", pasta / "o.docx")
+    assert p.returncode == 2 and "erro:" in p.stderr, p.stderr
+
+
+def test_arquivo_inexistente_codigo_2_sem_traceback():
+    pasta = F.pasta_temporaria("cli4")
+    p = _cli("gerar", pasta / "nao_existe.docx", "--formato", "layout", "--modo", "definitivo",
+             "--saida", pasta / "S", "--mapas", pasta / "M")
+    assert p.returncode == 2 and "Traceback" not in p.stderr and "erro:" in p.stderr, p.stderr
+
+
+def test_revisao_malformada_e_de_outro_arquivo():
+    pasta = F.pasta_temporaria("cli5")
+    arq = F.contrato_docx(pasta / "contrato.docx")
+    rev = pasta / "r.json"
+    rev.write_text(json.dumps({"arquivo": str(arq), "itens": [{"categoria": "pessoa"}]}), encoding="utf-8")
+    args = ("--formato", "layout", "--modo", "definitivo", "--saida", pasta / "S", "--mapas", pasta / "M")
+    p = _cli("gerar", arq, "--revisao", rev, *args)
+    assert p.returncode == 2 and "valor" in p.stderr and "Traceback" not in p.stderr, p.stderr
+    rev.write_text(json.dumps({"arquivo": "outro.docx", "itens": []}), encoding="utf-8")
+    p = _cli("gerar", arq, "--revisao", rev, *args)
+    assert p.returncode == 2 and "aviso: a revisão é de outro arquivo" in p.stderr, p.stderr
+    assert not (pasta / "S").exists()
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

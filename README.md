@@ -32,6 +32,10 @@ Licença: AGPL-3.0-only.
 
        .venv\Scripts\python -X utf8 -m pseudonimizador restaurar "Saida\contrato - pseudonimizado.docx" --saida restaurado.docx --mapas Mapas
 
+   Para texto colado (um `.txt` com os tókens), informe o mapa explicitamente:
+
+       .venv\Scripts\python -X utf8 -m pseudonimizador restaurar --texto texto.txt --mapa Mapas\MAPA.json
+
 ## Testes
 
     .venv\Scripts\python -X utf8 testes/executar_todos.py

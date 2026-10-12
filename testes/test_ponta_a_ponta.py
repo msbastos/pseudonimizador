@@ -33,6 +33,10 @@ def test_matriz_completa():
                 except Exception as e:  # noqa: BLE001
                     falhas.append(f"{rotulo}: {e!r}")
                     continue
+                texto_saida = ler(g.saida).texto
+                for dado in (F.PESSOA_1, F.PESSOA_2, F.CPF, F.EMAIL):
+                    if dado in texto_saida:
+                        falhas.append(f"{rotulo}: '{dado}' em claro na saída")
                 if (modo == "reversivel") != (g.mapa is not None):
                     falhas.append(f"{rotulo}: mapa inesperado")
                 if modo == "reversivel" and g.saida.suffix == ".docx" and nome == "docx" and formato == "layout":
