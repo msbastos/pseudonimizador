@@ -109,6 +109,28 @@ def test_autor_de_revisao_de_formatacao_sai():
     assert "LOCATÁRIA:" in ler(destino).texto and F.PESSOA_2 not in ler(destino).texto
 
 
+def test_autor_de_revisao_nos_estilos_e_na_numeracao_sai():
+    autor = "Fulano Revisor Beltrano"
+
+    def revisar(d):
+        estilo = d.styles["Normal"].element
+        rpr = estilo.get_or_add_rPr()
+        rpr.append(parse_xml(
+            f'<w:rPrChange {nsdecls("w")} w:id="11" w:author="{autor}" w:date="2026-10-11T00:00:00Z">'
+            '<w:rPr/></w:rPrChange>'))
+        d.add_paragraph("item", style="List Bullet")      # cria a parte de numeração
+        numeracao = d.part.numbering_part.element
+        lvl = numeracao.find(".//" + qn("w:lvl"))
+        lvl.append(parse_xml(
+            f'<w:pPr {nsdecls("w")}><w:pPrChange w:id="12" w:author="{autor}" w:initials="FRB">'
+            '<w:pPr/></w:pPrChange></w:pPr>'))
+
+    _, partes = _gerar_de("saida_docx_estilos", revisar)
+    for nome, conteudo in partes.items():
+        assert autor not in conteudo and "FRB" not in conteudo, nome
+        assert "PrChange" not in conteudo, nome
+
+
 def test_modelo_anexado_com_caminho_local_sai():
     alvo = "file:///D:/Perfis/FulanoSintetico/Modelos/Contrato.dotm"
 

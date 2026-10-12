@@ -64,9 +64,29 @@ def preparar(doc) -> None:
             # o run que só carregava a referência ao comentário some junto
             if pai.tag == qn("w:r") and all(f.tag == qn("w:rPr") for f in pai):
                 pai.getparent().remove(pai)
-        for el in raiz.iter(etree.Element):   # só elementos (sem comentários XML)
-            for atributo in _AUTORIA:
-                el.attrib.pop(atributo, None)
+        _tirar_autoria(raiz)
+    # estilos e numeração não têm texto do documento, mas guardam revisões de
+    # formatação com o nome de quem revisou
+    for raiz in _partes_de_definicao(doc):
+        for el in raiz.xpath(_MUDANCAS_DE_FORMATACAO):
+            el.getparent().remove(el)
+        _tirar_autoria(raiz)
+
+
+def _tirar_autoria(raiz) -> None:
+    for el in raiz.iter(etree.Element):   # só elementos (sem comentários XML)
+        for atributo in _AUTORIA:
+            el.attrib.pop(atributo, None)
+
+
+def _partes_de_definicao(doc) -> list:
+    """Os elementos-raiz das partes de estilos e de numeração que existirem
+    (sem criar nenhuma)."""
+    raizes = []
+    for rel in doc.part.rels.values():
+        if not rel.is_external and rel.reltype.endswith(("/styles", "/numbering")):
+            raizes.append(rel.target_part.element)
+    return raizes
 
 
 def _blocos(pai, elemento, vistos: set):
