@@ -45,6 +45,12 @@ def test_varrer_caminhos_de_outros_formatos():
     assert V.varrer("+/home/" + "j***/x e /c/Users/" + "m***/y" + chr(10), []) == []   # máscara não é nome
 
 
+def test_fonte_do_proprio_regex_nao_e_caminho_mas_usuario_com_letra_e():
+    fonte = "(?<![" + chr(92) + "w.:-])/" + "home/)(?!<)([^" + chr(92) + chr(92) + "/])"
+    assert V.varrer("+" + fonte + chr(10), []) == []
+    assert V.varrer("+/home/" + "jo/x" + chr(10), []) != []
+
+
 def test_termos_ausentes_usa_so_os_padroes_embutidos():
     with tempfile.TemporaryDirectory() as d:
         assert V.carregar_termos(Path(d) / "nao-existe.txt") == []
