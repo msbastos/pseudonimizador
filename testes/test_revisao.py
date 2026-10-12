@@ -6,6 +6,7 @@ from pathlib import Path
 import fabrica as F
 from pseudonimizador.leitura import Documento
 from pseudonimizador.motor.mapa import normalizar
+from pseudonimizador.motor.reversor import despseudonimizar_texto
 from pseudonimizador.motor.trocas import aplicar_trocas
 from pseudonimizador.revisao import Revisao
 
@@ -67,6 +68,29 @@ def test_mapa_so_com_tokens_usados_e_contexto():
     assert set(res.mapa["tokens"]) == usados
     i = TEXTO.index(F.CPF)
     assert F.CPF in r.contexto(i, i + len(F.CPF))
+
+
+def test_restauracao_devolve_o_original_com_duas_grafias():
+    t = f"CPF {F.CPF} e de novo 111 444 777 35, fim."
+    r = Revisao(Documento(Path("x.docx"), "docx", t, [None] * len(t)))
+    res = r.fechar()
+    saida = aplicar_trocas(t, res.trocas)
+    assert F.CPF not in saida and "111 444 777 35" not in saida
+    assert despseudonimizar_texto(saida, res.mapa) == t
+
+
+def test_valores_do_mapa_sao_literais_do_texto():
+    res = _rev().fechar()
+    for info in res.mapa["tokens"].values():
+        assert info["valor"] in TEXTO, info
+    assert despseudonimizar_texto(aplicar_trocas(TEXTO, res.trocas), res.mapa) == TEXTO
+
+
+def test_acrescentar_repetido_devolve_o_existente():
+    r = _rev()
+    a = r.acrescentar("senhora Pereira", "outro")
+    b = r.acrescentar("senhora Pereira", "outro")
+    assert a is b and sum(1 for i in r.itens if i.chave == a.chave) == 1
 
 
 if __name__ == "__main__":

@@ -82,6 +82,10 @@ class Revisao:
         if not ocorrencias:
             raise ValueError(f"não encontrado no documento: {valor!r}")
         item = Item(categoria, valor, ocorrencias, aceito=True, acrescido=True)
+        for existente in self.itens:
+            if existente.chave == item.chave:
+                existente.aceito = True
+                return existente
         self.itens.append(item)
         return item
 
@@ -92,6 +96,34 @@ class Revisao:
     def _token(self, mapa: dict, item: Item) -> str:
         return token_para(mapa, PREFIXOS.get(item.categoria, item.categoria.upper()),
                           _CATEGORIA_NO_MAPA.get(item.categoria, item.categoria), item.valor)
+
+    @staticmethod
+    def _um_literal_por_token(texto: str, mapa: dict, lista: list[Troca]) -> list[Troca]:
+        """Cada tóken guarda exatamente UMA grafia literal do texto original
+        (a restauração devolve o original); outra grafia ganha tóken próprio."""
+        dono: dict[tuple[str, str], str] = {}      # (tóken, grafia) -> tóken efetivo
+        primario: dict[str, str] = {}              # tóken -> primeira grafia
+        saida: list[Troca] = []
+        for t in lista:
+            original = texto[t.ini:t.fim]
+            chave = (t.token, original)
+            if chave not in dono:
+                if t.token not in primario:
+                    primario[t.token] = original
+                    mapa["tokens"][t.token]["valor"] = original
+                    dono[chave] = t.token
+                else:
+                    prefixo = re.fullmatch(r"\[\[(.+)_\d+\]\]", t.token).group(1)
+                    usados = [int(m.group(1)) for tok in mapa["tokens"]
+                              if (m := re.fullmatch(r"\[\[" + re.escape(prefixo) + r"_(\d+)\]\]", tok))]
+                    novo = f"[[{prefixo}_{max(usados) + 1}]]"
+                    info = dict(mapa["tokens"][t.token])
+                    info["valor"] = original
+                    info["mesmo_que"] = t.token
+                    mapa["tokens"][novo] = info
+                    dono[chave] = novo
+            saida.append(Troca(t.ini, t.fim, dono[chave]))
+        return saida
 
     def fechar(self) -> Resultado:
         texto = self.documento.texto
@@ -114,6 +146,7 @@ class Revisao:
                 if all(b <= t.ini or a >= t.fim for t in lista):
                     lista.append(Troca(a, b, self._token(mapa, it)))
         lista.sort()
+        lista = self._um_literal_por_token(texto, mapa, lista)
         usados = {t.token for t in lista}
         mapa["tokens"] = {tok: info for tok, info in mapa["tokens"].items() if tok in usados}
         return Resultado(mapa, lista)
