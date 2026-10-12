@@ -32,6 +32,7 @@ from .. import VERSAO
 from ..estado import Config, abrir_log, carregar, gravar, preparar_pastas, validar
 from ..restaurar import TokenOrfao, id_do_mapa, restaurar_docx, restaurar_texto
 from ..saida import _destino, mapas
+from .pasta_monitorada import Vigia
 from .registro import DocumentoInexistente, Registro, validar_nome_upload
 
 PASTA_ESTATICO = Path(__file__).resolve().parent / "estatico"
@@ -98,7 +99,7 @@ def _abrir_no_windows(caminho: Path) -> None:
 
 
 class Aplicacao:
-    def __init__(self, pasta_estado: Path, *, config: Config | None = None, inatividade_s: float = 1800.0,
+    def __init__(self, pasta_estado: Path, *, config: Config | None = None, inatividade_s: float = 1800.0, vigia_pasta_s: float = 2.0,
                  abrir_no_windows: Callable[[Path], None] | None = None,
                  ler: Callable | None = None, gerar: Callable | None = None):
         self.pasta_estado = Path(pasta_estado)
@@ -118,6 +119,10 @@ class Aplicacao:
         self._ultimo = time.monotonic()
         self.encerrar_pedido = False
         self.abrir_no_windows = abrir_no_windows or _abrir_no_windows
+        self.vigia = Vigia(self.registro, self.config.entrada, self.config.processados, self.log,
+                           intervalo_s=vigia_pasta_s)
+        self.registro.apos_gerar = self.vigia.processado
+        self.vigia.iniciar()
 
     # --- sessão --------------------------------------------------------------
     def emitir_token(self) -> str:
@@ -151,8 +156,10 @@ class Aplicacao:
 
     def aplicar_config(self, nova: Config) -> None:
         self.config = nova
+        self.vigia.trocar(nova.entrada, nova.processados)
 
     def encerrar(self) -> None:
+        self.vigia.parar()
         self.registro.encerrar(timeout=600)
         for h in list(self.log.handlers):
             h.close()
