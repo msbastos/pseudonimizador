@@ -6,7 +6,6 @@ lugar, com a fonte reduzida até caber (spec §7 e §14)."""
 from __future__ import annotations
 
 import os
-import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -70,62 +69,58 @@ def _palavras_na_imagem(pagina, linha: fitz.Rect) -> list[tuple[float, float]]:
     return [(recorte.x0 + a * escala, recorte.x0 + (b + 1) * escala) for a, b in palavras]
 
 
-def _peso(c: str) -> float:
-    """Largura relativa de um caractere: pontuação é bem mais estreita."""
-    return 1.0 if c.isalnum() else 0.4
-
-
-def _caixa_ocr(documento, pagina, grupo: _Grupo) -> tuple[float, float] | None:
-    """As posições dos caracteres do OCR são estimativas (a linha dividida em
-    partes iguais) e, em fonte proporcional, erram a ponto de cobrir a palavra
-    vizinha. Contamos as palavras da linha no texto e na imagem; se o número
-    coincide, o trecho ocupa as palavras da imagem de mesmo número (nas pontas,
-    uma palavra só em parte, como '(51)' ou 'nome,', é dividida pelo peso
-    dos caracteres). Senão (ou em página girada), None: vale a estimativa."""
-    if pagina.rotation or not grupo.ini < grupo.fim:
-        return None
+def _estimar_ocr(documento, grupo: _Grupo) -> fitz.Rect:
+    """Caixa estimada do trecho numa linha do OCR. O leitor divide a linha em
+    partes iguais por caractere; aqui a divisão é proporcional à largura dos
+    caracteres (métrica da Helvetica), que erra bem menos em fonte comum."""
     texto = documento.texto
-    a = texto.rfind("\n", 0, grupo.ini) + 1
-    b = texto.find("\n", grupo.fim)
+    a = texto.rfind(chr(10), 0, grupo.ini) + 1
+    b = texto.find(chr(10), grupo.fim)
     b = len(texto) if b < 0 else b
-    palavras = [m.span() for m in re.finditer(r"\S+", texto[a:b])]
-    palavras = [(x + a, y + a) for x, y in palavras]
-    dentro = [k for k, (x, y) in enumerate(palavras) if x < grupo.fim and y > grupo.ini]
-    if not dentro:
-        return None
-    todas = [documento.origens[i] for i in range(a, b)]
-    caixa = fitz.Rect(todas[0].rect)
-    for o in todas[1:]:
-        caixa |= fitz.Rect(o.rect)
-    na_imagem = _palavras_na_imagem(pagina, caixa)
-    if len(na_imagem) != len(palavras):
-        return None
-    k0, k1 = dentro[0], dentro[-1]
-    x0, y0 = palavras[k0]
-    x1, y1 = palavras[k1]
-    esq, dir_ = na_imagem[k0][0], na_imagem[k1][1]
-    if grupo.ini > x0:      # começa no meio da palavra
-        antes = sum(_peso(c) for c in texto[x0:grupo.ini])
-        total = sum(_peso(c) for c in texto[x0:y0])
-        esq = na_imagem[k0][0] + (na_imagem[k0][1] - na_imagem[k0][0]) * antes / total
-    if grupo.fim < y1:      # termina no meio da palavra
-        depois = sum(_peso(c) for c in texto[grupo.fim:y1])
-        total = sum(_peso(c) for c in texto[x1:y1])
-        dir_ = na_imagem[k1][1] - (na_imagem[k1][1] - na_imagem[k1][0]) * depois / total
-    return esq, dir_
+    linha = fitz.Rect(documento.origens[a].rect)
+    for o in documento.origens[a:b]:
+        if o is not None:
+            linha |= fitz.Rect(o.rect)
+    larguras = [fitz.get_text_length(c, fontname="helv", fontsize=1) or 0.3 for c in texto[a:b]]
+    total = sum(larguras)
+    antes = sum(larguras[:grupo.ini - a])
+    dentro = sum(larguras[grupo.ini - a:grupo.fim - a])
+    esc = linha.width / total
+    return fitz.Rect(linha.x0 + antes * esc, linha.y0, linha.x0 + (antes + dentro) * esc, linha.y1)
 
 
-def _retangulos(grupo: list, horizontal: tuple[float, float] | None = None) -> tuple[fitz.Rect, fitz.Rect]:
-    """(área da redação, área do tóken). Na página com texto, a redação é
+def _caixa_ocr(pagina, caixa: fitz.Rect) -> tuple[float, float]:
+    """As posições dos caracteres do OCR são estimativas (a linha dividida em
+    partes iguais) e, em fonte proporcional, podem errar para os dois lados.
+    Regra conservadora: a área é a UNIÃO da estimativa com toda palavra inteira
+    da imagem que a toque; só cresce, nunca troca nem encolhe a estimativa
+    (deixar dado à vista custa mais que apagar a palavra vizinha). Página
+    girada: vale só a estimativa."""
+    x0, x1 = caixa.x0, caixa.x1
+    if pagina.rotation:
+        return x0, x1
+    linha = fitz.Rect(pagina.rect.x0, caixa.y0, pagina.rect.x1, caixa.y1)
+    for a, b in _palavras_na_imagem(pagina, linha):
+        if a < caixa.x1 + 1 and b > caixa.x0 - 1:
+            x0, x1 = min(x0, a), max(x1, b)
+    return x0, x1
+
+
+def _retangulos(pagina, grupo: list, cheio: bool = False, estimada: fitz.Rect | None = None) -> tuple[fitz.Rect, fitz.Rect]:
+    """(área da redação, área do tóken). Na página com texto puro, a redação é
     estreitada nas pontas para não levar a letra vizinha (a letra do trecho
-    sai inteira mesmo assim, porque a redação remove o caractere). Na página
-    escaneada, cobre a caixa toda com folga: é ela que apaga os pixels."""
+    sai inteira mesmo assim, porque a redação remove o caractere). Se há
+    imagem sob o texto (`cheio`) ou a página é escaneada, cobre a caixa toda
+    com folga de 1 pt: é ela que apaga os pixels."""
     caixa = fitz.Rect(grupo[0].rect)
     for o in grupo[1:]:
         caixa |= fitz.Rect(o.rect)
     if grupo[0].ocr:
-        if horizontal:
-            caixa = fitz.Rect(horizontal[0], caixa.y0, horizontal[1], caixa.y1)
+        caixa = estimada or caixa
+        x0, x1 = _caixa_ocr(pagina, caixa)
+        caixa = fitz.Rect(x0, caixa.y0, x1, caixa.y1)
+        return caixa + (-1, -1, 1, 1), caixa
+    if cheio:
         return caixa + (-1, -1, 1, 1), caixa
     w0 = grupo[0].rect[2] - grupo[0].rect[0]
     w1 = grupo[-1].rect[2] - grupo[-1].rect[0]
@@ -155,20 +150,38 @@ def gerar_pdf_layout(documento, trocas, destino: Path) -> list[str]:
     tmp = destino.with_suffix(".pdf.tmp")
     pdf = fitz.open(str(documento.caminho))
     try:
-        por_pagina: dict[int, list[tuple[fitz.Rect, fitz.Rect, str]]] = defaultdict(list)
+        por_pagina: dict[int, list[list]] = defaultdict(list)   # [redação, área, tóken, ocr]
         for t in trocas:
             for k, grupo in enumerate(_linhas(documento, t.ini, t.fim)):
-                horizontal = _caixa_ocr(documento, pdf[grupo[0].pagina], grupo) if grupo[0].ocr else None
-                redacao, area = _retangulos(grupo, horizontal)
-                por_pagina[grupo[0].pagina].append((redacao, area, t.token if k == 0 else ""))
+                n = grupo[0].pagina
+                pagina = pdf[n]
+                cheio = False
+                if not grupo[0].ocr:
+                    caixa = fitz.Rect(grupo[0].rect)
+                    for o in grupo[1:]:
+                        caixa |= fitz.Rect(o.rect)
+                    # imagem sob o texto (PDF pesquisável): os pixels só saem
+                    # dentro da redação, então ela cobre a caixa inteira
+                    cheio = n in documento.paginas_ocr or any(
+                        fitz.Rect(i["bbox"]).intersects(caixa) for i in pagina.get_image_info())
+                redacao, area = _retangulos(pagina, grupo, cheio, _estimar_ocr(documento, grupo) if grupo[0].ocr else None)
+                por_pagina[n].append([redacao, area, t.token if k == 0 else "", grupo[0].ocr])
+        for itens in por_pagina.values():
+            # o mesmo nome no texto nativo e no OCR (PDF pesquisável): um só tóken,
+            # o da cópia nativa; a cópia do OCR é apagada sem escrever por cima
+            nativos = [i[1] for i in itens if not i[3]]
+            for i in itens:
+                if i[3] and i[2] and any(
+                        (i[1] & a).get_area() > 0.5 * min(i[1].get_area(), a.get_area()) for a in nativos):
+                    i[2] = ""
         for n, itens in sorted(por_pagina.items()):
             pagina = pdf[n]
-            for redacao, _, _ in itens:
+            for redacao, _, _, _ in itens:
                 pagina.add_redact_annot(redacao, fill=(1, 1, 1))
             pagina.apply_redactions(images=fitz.PDF_REDACT_IMAGE_PIXELS,
                                     graphics=fitz.PDF_REDACT_LINE_ART_NONE,
                                     text=fitz.PDF_REDACT_TEXT_REMOVE)
-            for _, area, token in itens:
+            for _, area, token, _ in itens:
                 if token and (aviso := _escrever(pagina, area, token, n)):
                     avisos.append(aviso)
         pdf.set_metadata({})

@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Termo adicional (AGPL-3.0, seção 7(b)): preservar os avisos de autoria; ver CREDITOS.md.
 import _base  # noqa: F401
+import re
+
 import fitz
 import fabrica as F
 from pseudonimizador.leitura import ler
+from pseudonimizador.leitura.modelo import Documento, OrigemPdf
 from pseudonimizador.leitura.ocr import ocr_pagina
+from pseudonimizador.leitura.pdf_ import ler_pdf
 from pseudonimizador.motor.mapa import normalizar
+from pseudonimizador.motor.trocas import Troca
 from pseudonimizador.revisao import Revisao
+from pseudonimizador.saida import pdf_layout
 from pseudonimizador.saida.pdf_layout import gerar_pdf_layout
 
 
@@ -42,13 +48,90 @@ def test_pagina_girada_sem_vazamento():
     assert "LOCADOR" in texto and "[[PESSOA_1]]" in texto.replace("\n", "")
 
 
+def _palavras(pdf):
+    return set(re.findall(r"\w+", normalizar(" ".join(t for t, _ in ocr_pagina(pdf[0])))))
+
+
 def test_escaneado_pixels_apagados():
     pasta = F.pasta_temporaria("saida_pdf_ocr")
     destino, _ = _gerar(F.contrato_escaneado(pasta / "e.pdf"), "e - pseudonimizado.pdf")
     with fitz.open(str(destino)) as pdf:
-        lido = normalizar(" ".join(t for t, _ in ocr_pagina(pdf[0])))
-    assert "maria aparecida pereira" not in lido and "111.444.777-35" not in lido, lido
-    assert "locador" in lido
+        lidas = _palavras(pdf)
+    for parte in ("maria", "aparecida", "pereira", "111", "444", "777"):
+        assert parte not in lidas, (parte, lidas)
+    assert "locador" in lidas, lidas
+
+
+def _imagem_da_pagina(origem, destino, escrever):
+    """PDF de uma página só com a imagem do que `escrever(pagina)` desenhou."""
+    fonte = fitz.open()
+    pagina = fonte.new_page(width=595, height=842)
+    escrever(pagina)
+    pix = pagina.get_pixmap(dpi=200)
+    doc = fitz.open()
+    nova = doc.new_page(width=595, height=842)
+    nova.insert_image(nova.rect, pixmap=pix)
+    return fonte, doc, nova, destino
+
+
+def test_ocr_estimativa_errada_nao_deixa_nome_a_vista():
+    # Imagem: "LOCADOR:  --  Maria  Aparecida  Pereira,  CPF" (6 palavras de tinta);
+    # o OCR leu "CP F" (também 6 palavras): a contagem bate, mas o alinhamento não.
+    # A área da redação só pode crescer a partir da estimativa.
+    pasta = F.pasta_temporaria("saida_pdf_ocr_estimativa")
+    linha = "LOCADOR:  --  Maria  Aparecida  Pereira,  CPF"
+
+    def escrever(pagina):
+        pagina.insert_text((60, 100), linha, fontsize=14, fontname="helv")
+
+    fonte, doc, nova, _ = _imagem_da_pagina(None, None, escrever)
+    ap = fonte[0].search_for("Aparecida")[0]
+    pe = fonte[0].search_for("Pereira,")[0]
+    ini = fonte[0].search_for("LOCADOR:")[0]
+    fim = fonte[0].search_for("CPF")[0]
+    caixa = fitz.Rect(ini.x0, ini.y0, fim.x1, ini.y1)
+    caminho = pasta / "estimativa.pdf"
+    doc.save(str(caminho))
+    texto = "LOCADOR: Maria Aparecida Pereira, CP F"
+    largura = caixa.width / len(texto)
+    origens = [OrigemPdf(0, (caixa.x0 + largura * k, caixa.y0, caixa.x0 + largura * (k + 1), caixa.y1), True)
+               for k in range(len(texto))]
+    documento = Documento(caminho=caminho, tipo="pdf_ocr", texto=texto, origens=origens, paginas_ocr=[0])
+    ini_t = texto.index("Maria")
+    fim_t = texto.index("Pereira,") + len("Pereira")
+    with fitz.open(str(caminho)) as pdf:
+        grupos = pdf_layout._linhas(documento, ini_t, fim_t)
+        assert len(grupos) == 1
+        redacao, _ = pdf_layout._retangulos(pdf[0], grupos[0], False, pdf_layout._estimar_ocr(documento, grupos[0]))
+    assert redacao.x0 <= ap.x0 + 0.3 and redacao.x1 >= pe.x1 - 0.3, (redacao, ap, pe)
+    avisos = gerar_pdf_layout(documento, [Troca(ini_t, fim_t, "[[PESSOA_1]]")], pasta / "saida.pdf")
+    assert isinstance(avisos, list)
+
+
+def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():
+    # Escaneado com camada de texto invisível: a redação do texto nativo tem de
+    # apagar também os pixels da caixa inteira (não só uma faixa estreitada).
+    pasta = F.pasta_temporaria("saida_pdf_pesquisavel")
+    fonte = fitz.open()
+    pagina = fonte.new_page(width=595, height=842)
+    F._pdf_de_linhas(pagina, tamanho=14)
+    pix = pagina.get_pixmap(dpi=200)
+    doc = fitz.open()
+    nova = doc.new_page(width=595, height=842)
+    nova.insert_image(nova.rect, pixmap=pix)
+    nova.insert_textbox(nova.rect + (56, 56, -56, -56), (chr(10) * 2).join(F.LINHAS_CONTRATO),
+                        fontsize=14, fontname="helv", render_mode=3)
+    caminho = pasta / "p.pdf"
+    doc.save(str(caminho))
+    documento = ler_pdf(caminho)          # sem OCR: só o texto nativo
+    assert not documento.paginas_ocr and F.PESSOA_1 in documento.texto
+    res = Revisao(documento).fechar()
+    destino = pasta / "p - pseudonimizado.pdf"
+    gerar_pdf_layout(documento, res.trocas, destino)
+    with fitz.open(str(destino)) as pdf:
+        lidas = _palavras(pdf)
+    for parte in ("maria", "aparecida", "pereira", "111", "444", "777"):
+        assert parte not in lidas, (parte, lidas)
 
 
 if __name__ == "__main__":
