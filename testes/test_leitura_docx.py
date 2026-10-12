@@ -62,6 +62,27 @@ def test_runs_em_sdt_inline_sao_lidos():
     assert isinstance(r.origens[i], OrigemDocx)
 
 
+def test_imagem_ou_objeto_embutido_gera_aviso():
+    import io
+    import zipfile
+    import docx
+    import fitz
+    pasta = F.pasta_temporaria("leitura_docx_imagem")
+    assert not any("imagem" in a for a in ler_docx(F.contrato_docx(pasta / "c.docx")).avisos)
+    d = docx.Document(str(pasta / "c.docx"))
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 8, 8), False)
+    d.add_picture(io.BytesIO(pix.tobytes("png")))
+    d.save(str(pasta / "img.docx"))
+    aviso = "o documento tem imagem(ns) ou objeto(s) embutido(s) que não são lidos nem tratados; confira-os"
+    assert aviso in ler_docx(pasta / "img.docx").avisos
+    # objeto embutido (word/embeddings/...) sem imagem
+    with zipfile.ZipFile(pasta / "c.docx") as z, zipfile.ZipFile(pasta / "obj.docx", "w") as w:
+        for item in z.infolist():
+            w.writestr(item, z.read(item.filename))
+        w.writestr("word/embeddings/oleObject1.bin", b"\0" * 16)
+    assert aviso in ler_docx(pasta / "obj.docx").avisos
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

@@ -70,6 +70,58 @@ def test_layout_preservado_e_tokens_no_lugar():
     assert original.core_properties.identifier == "pseudonimizador:teste"
 
 
+def _gerar_de(nome, preparar_doc):
+    pasta = F.pasta_temporaria(nome)
+    origem = F.contrato_docx(pasta / "c.docx")
+    d = docx.Document(str(origem))
+    preparar_doc(d)
+    d.save(str(origem))
+    doc = ler(origem)
+    destino = pasta / "c - pseudonimizado.docx"
+    gerar_docx_layout(doc, Revisao(doc).fechar().trocas, destino)
+    with zipfile.ZipFile(destino) as z:
+        return destino, {n: z.read(n).decode("utf-8", "replace") for n in z.namelist()
+                         if n.endswith((".xml", ".rels"))}
+
+
+def test_autor_de_revisao_de_formatacao_sai():
+    autor = "Fulano Revisor Beltrano"
+
+    def revisar(d):
+        p = d.paragraphs[2]
+        p.runs[0].bold = True
+        rpr = p.runs[0]._r.get_or_add_rPr()
+        rpr.append(parse_xml(
+            f'<w:rPrChange {nsdecls("w")} w:id="7" w:author="{autor}" w:date="2026-10-11T00:00:00Z">'
+            '<w:rPr/></w:rPrChange>'))
+        ppr = p._p.get_or_add_pPr()
+        ppr.append(parse_xml(
+            f'<w:pPrChange {nsdecls("w")} w:id="8" w:author="{autor}" w:date="2026-10-11T00:00:00Z">'
+            '<w:pPr/></w:pPrChange>'))
+        sect = d.element.body.find(qn("w:sectPr"))
+        sect.append(parse_xml(
+            f'<w:sectPrChange {nsdecls("w")} w:id="9" w:author="{autor}" w:initials="FRB"><w:sectPr/></w:sectPrChange>'))
+
+    destino, partes = _gerar_de("saida_docx_rprchange", revisar)
+    for nome, conteudo in partes.items():
+        assert autor not in conteudo and "FRB" not in conteudo, nome
+        assert "PrChange" not in conteudo, nome
+    assert "LOCATÁRIA:" in ler(destino).texto and F.PESSOA_2 not in ler(destino).texto
+
+
+def test_modelo_anexado_com_caminho_local_sai():
+    alvo = "file:///D:/Perfis/FulanoSintetico/Modelos/Contrato.dotm"
+
+    def anexar(d):
+        parte = d.part._settings_part
+        rid = parte.relate_to(alvo, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate", is_external=True)
+        parte.element.append(parse_xml(f'<w:attachedTemplate {nsdecls("w", "r")} r:id="{rid}"/>'))
+
+    _, partes = _gerar_de("saida_docx_modelo", anexar)
+    for nome, conteudo in partes.items():
+        assert "FulanoSintetico" not in conteudo and "attachedTemplate" not in conteudo, nome
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

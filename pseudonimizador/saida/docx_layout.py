@@ -6,7 +6,8 @@ perdem a parte trocada. Metadados, comentários e revisões saem (spec §7).
 
 Também são limpos: os alvos dos hyperlinks externos (cada trecho trocado, sem
 distinguir caixa; formas codificadas em URL, como %40, não são tratadas), os
-atributos `w:tooltip` e o texto alternativo (`descr`, `title` de `wp:docPr`).
+atributos `w:tooltip`, o texto alternativo (`descr`, `title` de `wp:docPr`) e
+o modelo anexado (`w:attachedTemplate` de settings.xml e a sua relação).
 
 NÃO são editados: notas de rodapé e de fim, códigos de campo (`w:instrText`),
 `w:docVar` e imagens. Se um valor do mapa sobrar aí, a verificação de saída de
@@ -41,10 +42,22 @@ def limpar_metadados_docx(doc, identificador: str = "") -> None:
             doc.part.rels.pop(rid)           # drop_rel só solta com a referência já tirada do XML
         elif rel.reltype.endswith(_CUSTOM_XML):
             doc.part.rels.pop(rid)
+    _tirar_modelo_anexado(doc)
     pacote = doc.part.package
     for rid, rel in list(pacote.rels.items()):
         if rel.reltype in (RT.EXTENDED_PROPERTIES, RT.CUSTOM_PROPERTIES, RT.THUMBNAIL):
             pacote.rels.pop(rid)
+
+
+def _tirar_modelo_anexado(doc) -> None:
+    """word/settings.xml: o w:attachedTemplate aponta o modelo do Word, e o alvo
+    da relação pode ser um caminho local com o nome do usuário. Saem os dois."""
+    parte = doc.part._settings_part
+    for el in parte.element.findall(qn("w:attachedTemplate")):
+        parte.element.remove(el)
+    for rid, rel in list(parte.rels.items()):
+        if rel.reltype.endswith("/attachedTemplate"):
+            parte.rels.pop(rid)
 
 
 def _partes_com_hyperlinks(doc):

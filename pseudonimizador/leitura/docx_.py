@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 from docx.oxml.ns import qn
+from lxml import etree
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
@@ -37,10 +38,22 @@ def _desembrulhar(el) -> None:
     pai.remove(el)
 
 
+# revisões de formatação: ficam dentro dos *Pr (nunca contêm runs), então
+# tirá-las não muda a contagem de parágrafos nem de runs
+_MUDANCAS_DE_FORMATACAO = " | ".join(f".//w:{t}" for t in (
+    "rPrChange", "pPrChange", "sectPrChange", "tblPrChange", "tcPrChange", "trPrChange",
+    "tblGridChange", "numberingChange", "tblPrExChange"))
+_AUTORIA = (qn("w:author"), qn("w:initials"))
+
+
 def preparar(doc) -> None:
-    """Aceita as revisões controladas (inserção fica, exclusão sai) e tira as
-    marcas de comentário do texto: o que sobra é o que o leitor e a saída veem."""
+    """Aceita as revisões controladas (inserção fica, exclusão sai), descarta
+    as revisões de formatação, tira as marcas de comentário do texto e os
+    atributos de autoria (w:author, w:initials) que sobrarem: o que fica é o
+    que o leitor e a saída veem."""
     for raiz in _raizes(doc):
+        for el in raiz.xpath(_MUDANCAS_DE_FORMATACAO):
+            el.getparent().remove(el)
         for el in raiz.xpath(".//w:del | .//w:moveFrom"):
             el.getparent().remove(el)
         for el in raiz.xpath(".//w:ins | .//w:moveTo"):
@@ -51,6 +64,9 @@ def preparar(doc) -> None:
             # o run que só carregava a referência ao comentário some junto
             if pai.tag == qn("w:r") and all(f.tag == qn("w:rPr") for f in pai):
                 pai.getparent().remove(pai)
+        for el in raiz.iter(etree.Element):   # só elementos (sem comentários XML)
+            for atributo in _AUTORIA:
+                el.attrib.pop(atributo, None)
 
 
 def _blocos(pai, elemento, vistos: set):
@@ -118,8 +134,11 @@ def _avisos(caminho: Path) -> list[str]:
         nomes = set(z.namelist())
     avisos = []
     if "word/footnotes.xml" in nomes or "word/endnotes.xml" in nomes:
-        avisos.append("o documento tem notas de rodapé ou de fim, que não são tratadas; "
-                      "se houver dado pessoal nelas, a geração será bloqueada")
+        avisos.append("o documento tem notas de rodapé ou de fim, que não são lidas nem tratadas; "
+                      "confira-as antes de compartilhar a saída")
+    if any(n.startswith(("word/media/", "word/embeddings/")) for n in nomes):
+        avisos.append("o documento tem imagem(ns) ou objeto(s) embutido(s) que não são lidos nem "
+                      "tratados; confira-os")
     return avisos
 
 
