@@ -33,21 +33,24 @@ def test_estaticos_existem_sao_locais_e_sem_inline():
 
 def test_todo_campo_tem_rotulo():
     html = _ler("index.html")
-    ids = re.findall(r'<(?:input|select|textarea)[^>]*\sid="([^"]+)"', html)
-    assert ids
-    for id_ in ids:
-        assert f'for="{id_}"' in html, f"campo sem <label for>: {id_}"
+    campos = re.findall(r'<(?:input|select|textarea)[^>]*\sid="([^"]+)"', html)
+    assert campos
+    rotulos = set(re.findall(r'<label[^>]*\sfor="([^"]+)"', html))
+    for id_ in campos:
+        assert id_ in rotulos, f"campo sem <label for> exato: {id_}"
+    for r in rotulos:
+        assert r in campos, f"label for sem campo com esse id: {r}"
 
 
 def test_rotas_do_app_js_existem_no_servidor():
     js = _ler("app.js")
     js = re.sub(r"'\s*\+\s*\w+\s*\+\s*'", "0" * 16, js)        # '/api/documentos/' + id + '/gerar'
     js = re.sub(r"'\s*\+\s*\w+\b", "0" * 16 + "'", js)           # '/api/documentos/' + id
-    rotas = set(re.findall(r"'(/api/[^']*)'", js))
-    assert {"/api/documentos", "/api/config", "/api/mapas", "/api/encerrar"} <= rotas
-    padroes = [p for _, p in ROTAS]
-    for rota in rotas:
-        assert any(re.fullmatch(p, rota) for p in padroes), f"rota do app.js sem servidor: {rota}"
+    usos = set(re.findall(r"api\('([A-Z]+)',\s*'(/api/[^']*)'", js))
+    assert {p for _, p in usos} >= {"/api/documentos", "/api/config", "/api/mapas", "/api/encerrar"}
+    assert usos == set(re.findall(r"'([A-Z]+)',\s*'(/api/[^']*)'", js)), "chamada a /api/ sem api(metodo, rota)"
+    for metodo, rota in usos:
+        assert any(m == metodo and re.fullmatch(p, rota) for m, p in ROTAS), f"app.js usa {metodo} {rota}, sem rota no servidor"
 
 
 def test_app_js_confere_o_tamanho_antes_de_enviar():

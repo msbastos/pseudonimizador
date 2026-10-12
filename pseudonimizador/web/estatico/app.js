@@ -8,6 +8,9 @@
   const LIMITE = 100 * 1024 * 1024;   // o mesmo limite do servidor; conferido aqui para o aviso aparecer sem enviar
   let config = null;
   let atual = null;              // id do documento em revisão/resultado
+  let docRevisado = null;        // documento cujas opções de geração já foram preenchidas
+  let assinatura = '';           // JSON da última lista desenhada: sem mudança, sem redesenhar
+  let sequencia = 0;             // só a resposta mais recente da lista é desenhada
   let esperandoGeracao = false;  // depois de "Gerar": abre o resultado sozinho quando ficar pronto
 
   function mensagem(texto, erro) {
@@ -28,7 +31,9 @@
     }
     let r;
     try { r = await fetch(caminho, opcoes); } catch (e) {
-      throw new Error('Não foi possível falar com o Pseudonimizador. Ele pode ter sido encerrado; abra-o de novo pelo atalho.');
+      const falha = new Error('Não foi possível falar com o Pseudonimizador. Ele pode ter sido encerrado; abra-o de novo pelo atalho.');
+      falha.rede = true;
+      throw falha;
     }
     let dados = {};
     try { dados = await r.json(); } catch (e) { dados = {}; }
@@ -46,13 +51,19 @@
       if (b.dataset.tela === tela) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     }
     mensagem('');
-    if (tela === 'documentos') atualizarLista();
+    if (tela !== 'documentos') esperandoGeracao = false;
+    if (tela !== 'restaurar') {
+      for (const id of ['rest-texto', 'rest-texto-saida', 'rest-arquivo']) $(id).value = '';
+      $('rest-docx-resultado').textContent = '';
+    }
+    if (tela === 'documentos') { assinatura = ''; atualizarLista(); }
     if (tela === 'restaurar') carregarMapas();
     if (tela === 'configuracoes') preencherConfig();
   }
 
-  function botao(rotulo, acao, classe) {
+  function botao(rotulo, acao, classe, id) {
     const b = document.createElement('button');
+    if (id) { b.dataset.id = id; b.dataset.acao = rotulo; }
     b.type = 'button';
     b.textContent = rotulo;
     if (classe) b.className = classe;
@@ -97,9 +108,9 @@
     }
     const acoes = document.createElement('span');
     acoes.className = 'acoes';
-    if (d.revisavel && (d.situacao === 'revisao' || d.situacao === 'erro')) acoes.append(botao('Revisar', () => abrirRevisao(d.id)));
-    if (d.situacao === 'pronto') acoes.append(botao('Resultado', () => abrirResultado(d.id)));
-    acoes.append(botao('Descartar', () => descartar(d.id), 'secundario'));
+    if (d.revisavel && (d.situacao === 'revisao' || d.situacao === 'erro')) acoes.append(botao('Revisar', () => abrirRevisao(d.id), '', d.id));
+    if (d.situacao === 'pronto') acoes.append(botao('Resultado', () => abrirResultado(d.id), '', d.id));
+    acoes.append(botao('Descartar', () => descartar(d.id), 'secundario', d.id));
     li.append(acoes);
     if (d.erro) {
       const e = document.createElement('p');
@@ -119,14 +130,27 @@
 
   async function atualizarLista() {
     let dados;
-    try { dados = await api('GET', '/api/documentos'); } catch (e) { mensagem(e.message, true); return; }
-    const janela = $('lista-janela');
-    const pasta = $('lista-pasta');
-    janela.replaceChildren();
-    pasta.replaceChildren();
-    for (const d of dados.documentos) (d.origem === 'pasta' ? pasta : janela).append(linhaDocumento(d));
-    if (!janela.children.length) janela.append(vazio('Nenhum documento enviado.'));
-    if (!pasta.children.length) pasta.append(vazio('Nada pendente.'));
+    const minha = ++sequencia;
+    try { dados = await api('GET', '/api/documentos'); } catch (e) { if (minha === sequencia) mensagem(e.message, true); return; }
+    if (minha !== sequencia) return;      // chegou uma resposta mais nova: esta é velha
+    const nova = JSON.stringify(dados.documentos);
+    if (nova !== assinatura) {
+      assinatura = nova;
+      const foco = document.activeElement;
+      const lembrado = foco && foco.dataset && foco.dataset.id ? [foco.dataset.id, foco.dataset.acao] : null;
+      const janela = $('lista-janela');
+      const pasta = $('lista-pasta');
+      janela.replaceChildren();
+      pasta.replaceChildren();
+      for (const d of dados.documentos) (d.origem === 'pasta' ? pasta : janela).append(linhaDocumento(d));
+      if (!janela.children.length) janela.append(vazio('Nenhum documento enviado.'));
+      if (!pasta.children.length) pasta.append(vazio('Nada pendente.'));
+      if (lembrado) {
+        for (const b of document.querySelectorAll('#tela-documentos button[data-id]')) {
+          if (b.dataset.id === lembrado[0] && b.dataset.acao === lembrado[1]) { b.focus(); break; }
+        }
+      }
+    }
     if (atual && esperandoGeracao) {
       const d = dados.documentos.find((x) => x.id === atual);
       if (d && d.situacao === 'pronto') { esperandoGeracao = false; abrirResultado(atual); }
@@ -137,7 +161,7 @@
   async function descartar(id) {
     if (!window.confirm('Descartar este documento?')) return;
     try { await api('DELETE', '/api/documentos/' + id); } catch (e) { mensagem(e.message, true); }
-    if (atual === id) atual = null;
+    if (atual === id) { atual = null; esperandoGeracao = false; }
     atualizarLista();
   }
 
@@ -193,6 +217,8 @@
     let d;
     try { d = await api('GET', '/api/documentos/' + id); } catch (e) { mensagem(e.message, true); return; }
     atual = id;
+    const outro = docRevisado !== id;
+    docRevisado = id;
     $('rev-nome').textContent = d.nome;
     lista($('rev-avisos'), d.avisos);
     $('rev-erro').hidden = !d.erro;
@@ -211,7 +237,7 @@
       tr.append(td);
       corpo.append(tr);
     }
-    if (config) { marcar('formato', config.formato); marcar('tipo', config.tipo); marcar('modo', config.modo); }
+    if (config && outro) { marcar('formato', config.formato); marcar('tipo', config.tipo); marcar('modo', config.modo); }
     atualizarTipo();
     $('botao-gerar').disabled = false;
     mostrar('revisao');
@@ -233,8 +259,8 @@
     $('botao-gerar').disabled = true;
     try {
       await api('POST', '/api/documentos/' + atual + '/gerar', { formato: valorMarcado('formato'), tipo: valorMarcado('tipo'), modo: valorMarcado('modo') });
-      esperandoGeracao = true;
       mostrar('documentos');
+      esperandoGeracao = true;
       mensagem('Gerando… o resultado abre sozinho quando ficar pronto.');
     } catch (e) { $('botao-gerar').disabled = false; mensagem(e.message, true); }
   });
@@ -343,18 +369,30 @@
   const zona = $('zona');
   zona.addEventListener('dragover', (ev) => { ev.preventDefault(); zona.classList.add('ativa'); });
   zona.addEventListener('dragleave', () => zona.classList.remove('ativa'));
-  zona.addEventListener('drop', (ev) => { ev.preventDefault(); zona.classList.remove('ativa'); enviar(ev.dataTransfer.files); });
+  zona.addEventListener('drop', (ev) => { ev.preventDefault(); zona.classList.remove('ativa'); enviar(Array.from(ev.dataTransfer.files)); });
   zona.addEventListener('click', (ev) => { if (ev.target.tagName !== 'LABEL') $('arquivos').click(); });
   zona.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); $('arquivos').click(); } });
-  $('arquivos').addEventListener('change', () => { enviar($('arquivos').files); $('arquivos').value = ''; });
+  $('arquivos').addEventListener('change', () => {
+    const escolhidos = Array.from($('arquivos').files);      // a FileList é viva: copiar antes de limpar o campo
+    $('arquivos').value = '';
+    enviar(escolhidos);
+  });
+  // um arquivo solto fora da zona não pode ser aberto pelo navegador no lugar da janela
+  window.addEventListener('dragover', (ev) => ev.preventDefault());
+  window.addEventListener('drop', (ev) => ev.preventDefault());
   for (const b of document.querySelectorAll('nav [data-tela]')) b.addEventListener('click', () => mostrar(b.dataset.tela));
   $('encerrar').addEventListener('click', async () => {
     if (!window.confirm('Encerrar o Pseudonimizador? Documentos ainda não gerados serão descartados.')) return;
-    try { await api('POST', '/api/encerrar'); } catch (e) { mensagem(e.message, true); return; }
+    let fechou = false;
+    try { await api('POST', '/api/encerrar'); } catch (e) {
+      if (!e.rede) { mensagem(e.message, true); return; }
+      fechou = true;          // a conexão caiu logo depois do pedido: o aplicativo já saiu
+    }
     window.clearInterval(relogio);
     const p = document.createElement('p');
     p.className = 'mensagem';
-    p.textContent = 'O Pseudonimizador vai se encerrar assim que terminar o que está fazendo. Pode fechar esta janela.';
+    p.textContent = fechou ? 'O aplicativo foi encerrado. Pode fechar esta janela.'
+      : 'O Pseudonimizador vai se encerrar assim que terminar o que está fazendo. Pode fechar esta janela.';
     document.body.replaceChildren(p);
   });
 
@@ -366,7 +404,7 @@
     o.textContent = rotulo;
     selCategoria.append(o);
   }
-  const relogio = window.setInterval(() => { if (!$('tela-documentos').hidden) atualizarLista(); }, 2000);
+  const relogio = window.setInterval(() => { if (TOKEN && !$('tela-documentos').hidden) atualizarLista(); }, 2000);
   if (!TOKEN) mensagem('Abra o Pseudonimizador pelo atalho: sem o endereço de sessão a janela não funciona.', true);
   api('GET', '/api/estado').then((e) => { $('versao').textContent = e.versao; }).catch(() => {});
   carregarConfig().then(() => mostrar('documentos'));
