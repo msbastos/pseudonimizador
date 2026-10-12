@@ -5,6 +5,7 @@ página escaneada, os pixels da área são apagados) e o tóken escrito no mesmo
 lugar, com a fonte reduzida até caber (spec §7 e §14)."""
 from __future__ import annotations
 
+import bisect
 import os
 import re
 from collections import defaultdict
@@ -43,18 +44,25 @@ def _linhas(documento, ini: int, fim: int) -> list[_Grupo]:
     return grupos
 
 
-def _palavras_na_imagem(pagina, linha: fitz.Rect) -> list[tuple[float, float]]:
-    """Faixas horizontais (x0, x1, em pontos) com tinta na linha, separadas por
-    vãos de espaço de palavra. Lê os pixels da página como está."""
-    dpi = 200
+DPI = 200
+
+
+def _colunas_com_tinta(pagina, linha: fitz.Rect) -> tuple[float, list[bool]]:
+    """(x0 em pontos, para cada coluna de pixel da faixa `linha`: tem tinta?).
+    Lê os pixels da página como estão."""
     recorte = (linha + (-2, 0, 2, 0)) & pagina.rect
-    pix = pagina.get_pixmap(dpi=dpi, clip=recorte, colorspace=fitz.csGRAY, alpha=False)
+    pix = pagina.get_pixmap(dpi=DPI, clip=recorte, colorspace=fitz.csGRAY, alpha=False)
     amostras = pix.samples
-    largura, altura = pix.width, pix.height
-    if not largura or not altura:
-        return []
-    tinta = [any(amostras[y * pix.stride + x] < 140 for y in range(altura)) for x in range(largura)]
-    vao_minimo = max(3, int(0.22 * altura))
+    if not pix.width or not pix.height:
+        return recorte.x0, []
+    tinta = [any(amostras[y * pix.stride + x] < 140 for y in range(pix.height)) for x in range(pix.width)]
+    return recorte.x0, tinta
+
+
+def _palavras_das_colunas(x0: float, tinta: list[bool], altura_pt: float) -> list[tuple[float, float]]:
+    """Faixas horizontais (x0, x1, em pontos) com tinta, separadas por vãos de
+    espaço de palavra."""
+    vao_minimo = max(3, int(0.22 * altura_pt * DPI / 72))
     palavras: list[list[int]] = []
     vazios = vao_minimo
     for x, t in enumerate(tinta):
@@ -66,14 +74,30 @@ def _palavras_na_imagem(pagina, linha: fitz.Rect) -> list[tuple[float, float]]:
             vazios = 0
         else:
             vazios += 1
-    escala = 72 / dpi
-    return [(recorte.x0 + a * escala, recorte.x0 + (b + 1) * escala) for a, b in palavras]
+    escala = 72 / DPI
+    return [(x0 + a * escala, x0 + (b + 1) * escala) for a, b in palavras]
+
+
+def _palavras_na_imagem(pagina, linha: fitz.Rect) -> list[tuple[float, float]]:
+    x0, tinta = _colunas_com_tinta(pagina, linha)
+    return _palavras_das_colunas(x0, tinta, linha.height)
 
 
 def _estimar_ocr(documento, grupo: _Grupo, pagina=None) -> fitz.Rect:
-    """Caixa estimada do trecho numa linha do OCR. O leitor divide a linha em
-    partes iguais por caractere; aqui a divisão é proporcional à largura dos
-    caracteres (métrica da Helvetica), que erra bem menos em fonte comum."""
+    """Caixa estimada do trecho numa linha do OCR. Sem a página, a linha é
+    dividida em partes proporcionais à largura dos caracteres (Helvetica).
+    Com a página, a posição vem da imagem: a fração do texto da linha (pesos
+    da Helvetica) em que o trecho começa e termina é levada para as colunas de
+    pixel da faixa, contando a tinta e, do vão em branco, só a largura de um
+    espaço (vão grande, carimbo apagado ou rabisco não lido não entram na
+    conta; nenhuma métrica de fonte mede o vão). O núcleo se alarga em meio
+    corpo de linha por lado, só por espaço em branco: não entra em palavra da
+    imagem que o núcleo não toca (o rótulo vizinho fica). Com o mesmo número de
+    palavras no texto e na imagem, as palavras da imagem de mesmo índice que as
+    do trecho entram. Depois, _caixa_ocr une as palavras inteiras que a tocam.
+    Limite conhecido: tinta que o OCR não leu (rabisco) desloca a estimativa
+    em até a sua largura; se o núcleo cair em palavra vizinha, ela é apagada
+    inteira (excesso, não vazamento)."""
     texto = documento.texto
     a = texto.rfind(chr(10), 0, grupo.ini) + 1
     b = texto.find(chr(10), grupo.fim)
@@ -90,19 +114,39 @@ def _estimar_ocr(documento, grupo: _Grupo, pagina=None) -> fitz.Rect:
     caixa = fitz.Rect(linha.x0 + antes * esc, linha.y0, linha.x0 + (antes + dentro) * esc, linha.y1)
     if pagina is None or pagina.rotation:
         return caixa
-    # Só crescem (deixar dado à vista custa mais que apagar o vizinho):
-    ink = [(x, y) for x, y in _palavras_na_imagem(pagina, fitz.Rect(pagina.rect.x0, linha.y0, pagina.rect.x1, linha.y1))
-           if x < linha.x1 + 2 and y > linha.x0 - 2]
-    if not ink:
+    x0, tinta = _colunas_com_tinta(pagina, linha)
+    if not any(tinta):
         return caixa
-    # (b) largura que o texto lido não explica (vão, carimbo, marca não lida):
-    # a estimativa se alarga dos dois lados por ela
-    natural = total * linha.height / 1.25
-    sobra = max(0.0, (ink[-1][1] - ink[0][0]) - natural)
-    caixa.x0 -= sobra
-    caixa.x1 += sobra
-    # (a) com o mesmo número de palavras no texto e na imagem, as palavras da
-    # imagem de mesmo índice que as do trecho entram na área
+    # posição efetiva de cada coluna: tinta avança; vão em branco avança só até
+    # o tamanho de um espaço (o resto do vão, ou do carimbo apagado, não conta)
+    espaco = max(2, int(0.25 * linha.height * DPI / 72))
+    efetiva: list[int] = []
+    pos = vazio = 0
+    for t in tinta:
+        vazio = 0 if t else vazio + 1
+        if t or vazio <= espaco:
+            pos += 1
+        efetiva.append(pos)
+    soma = sum(larguras)
+    f0 = sum(larguras[:grupo.ini - a]) / soma
+    f1 = sum(larguras[:grupo.fim - a]) / soma
+    k0 = bisect.bisect_left(efetiva, max(1, int(f0 * pos)))
+    k1 = bisect.bisect_left(efetiva, max(1, int(f1 * pos)))
+    k0, k1 = min(k0, len(tinta) - 1), min(max(k1, k0), len(tinta) - 1)
+    escala = 72 / DPI
+    nucleo = (x0 + k0 * escala, x0 + (k1 + 1) * escala)
+    ink = _palavras_das_colunas(x0, tinta, linha.height)
+    # cada lado se alarga em meio corpo de linha (um caractere médio), mas o
+    # alargamento só avança por espaço em branco: não entra em palavra da
+    # imagem que o núcleo não toca (o rótulo vizinho, como "Nome:", fica)
+    folga = linha.height * 0.5
+    esq, dir_ = nucleo[0] - folga, nucleo[1] + folga
+    for ini_p, fim_p in ink:
+        if fim_p < nucleo[0] - 1:
+            esq = max(esq, min(fim_p + 1.5, nucleo[0]))
+        elif ini_p > nucleo[1] + 1:
+            dir_ = min(dir_, max(ini_p - 1.5, nucleo[1]))
+    caixa = fitz.Rect(esq, linha.y0, dir_, linha.y1)
     palavras = [m.span() for m in re.finditer(r"\S+", texto[a:b])]
     if len(palavras) == len(ink):
         for k, (x, y) in enumerate(palavras):
@@ -124,7 +168,7 @@ def _caixa_ocr(pagina, caixa: fitz.Rect) -> tuple[float, float]:
         return x0, x1
     linha = fitz.Rect(pagina.rect.x0, caixa.y0, pagina.rect.x1, caixa.y1)
     for a, b in _palavras_na_imagem(pagina, linha):
-        if a < caixa.x1 + 1 and b > caixa.x0 - 1:
+        if a < caixa.x1 and b > caixa.x0:
             x0, x1 = min(x0, a), max(x1, b)
     return x0, x1
 

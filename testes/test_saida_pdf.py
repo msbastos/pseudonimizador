@@ -161,6 +161,69 @@ def test_token_duplicado_nativo_e_ocr_sai_uma_vez():
     assert texto_saida.count("[[PESSOA_1]]") == 1, texto_saida
 
 
+RESTO_VAO = ["Maria", "Aparecida", "Lima,", "brasileira,", "casada,", "residente", "na", "Rua", "das", "Flores,", "12"]
+
+
+def _pagina_com_vao(pasta, nome, vao):
+    """Imagem de uma linha em Times 12: "Nome:", um vão `vao` pt com um rabisco
+    no meio e as outras palavras com 6 pt entre elas. Devolve (caminho, página
+    de origem, retângulos de Maria/Aparecida/Lima,, retângulo de Nome: e do fim)."""
+    fonte = fitz.open()
+    pagina = fonte.new_page(width=595, height=842)
+    pagina.insert_text((60, 100), "Nome:", fontsize=12, fontname="tiro")
+    x = 60 + fitz.get_text_length("Nome:", fontname="tiro", fontsize=12) + vao
+    meio = x - vao / 2
+    pontos = [(meio - 8 + 2 * k, 97 if k % 2 else 100) for k in range(9)]
+    pagina.draw_polyline(pontos, color=(0, 0, 0), width=1)
+    for palavra in RESTO_VAO:
+        pagina.insert_text((x, 100), palavra, fontsize=12, fontname="tiro")
+        x += fitz.get_text_length(palavra, fontname="tiro", fontsize=12) + 6
+    alvo = [pagina.search_for(p)[0] for p in ("Maria", "Aparecida", "Lima,")]
+    nome = pagina.search_for("Nome:")[0]
+    fim = pagina.search_for("12")[-1]
+    pix = pagina.get_pixmap(dpi=200)
+    doc = fitz.open()
+    nova = doc.new_page(width=595, height=842)
+    nova.insert_image(nova.rect, pixmap=pix)
+    caminho = pasta / f"vao{int(vao)}.pdf"
+    doc.save(str(caminho))
+    return caminho, alvo, nome, fim
+
+
+def test_ocr_real_vao_e_rabisco_nao_deixam_nome_a_vista():
+    for vao in (40, 55):
+        pasta = F.pasta_temporaria(f"saida_pdf_vao_real_{vao}")
+        caminho, _, _, _ = _pagina_com_vao(pasta, "vao", vao)
+        destino, _ = _gerar(caminho, "vao - pseudonimizado.pdf")
+        with fitz.open(str(destino)) as pdf:
+            lidas = _palavras(pdf)
+        for parte in ("lima", "maria", "aparecida"):
+            assert parte not in lidas, (vao, parte, lidas)
+        assert "nome" in lidas, (vao, lidas)
+
+
+def test_ocr_caixa_alta_do_ocr_cobre_a_tinta_com_vao():
+    # Caixa do OCR com altura 1,42 x o corpo (como o RapidOCR), Times 12, vãos de 30/50/80 pt.
+    texto = "Nome: " + " ".join(RESTO_VAO)
+    for vao in (30, 50, 80):
+        pasta = F.pasta_temporaria(f"saida_pdf_vao_fn_{vao}")
+        caminho, alvo, nome, fim = _pagina_com_vao(pasta, "vao", vao)
+        centro = (nome.y0 + nome.y1) / 2
+        caixa = fitz.Rect(nome.x0, centro - 8.5, fim.x1, centro + 8.5)
+        largura = caixa.width / len(texto)
+        origens = [OrigemPdf(0, (caixa.x0 + largura * k, caixa.y0, caixa.x0 + largura * (k + 1), caixa.y1), True)
+                   for k in range(len(texto))]
+        documento = Documento(caminho=caminho, tipo="pdf_ocr", texto=texto, origens=origens, paginas_ocr=[0])
+        ini_t = texto.index("Maria")
+        fim_t = texto.index("Lima,") + len("Lima")
+        with fitz.open(str(caminho)) as pdf:
+            grupos = pdf_layout._linhas(documento, ini_t, fim_t)
+            redacao, _ = pdf_layout._retangulos(
+                pdf[0], grupos[0], False, pdf_layout._estimar_ocr(documento, grupos[0], pdf[0]))
+        for r in alvo:
+            assert redacao.x0 <= r.x0 + 0.3 and redacao.x1 >= r.x1 - 0.3 - (1.5 if r is alvo[2] else 0), (vao, redacao, r)
+
+
 def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():
     # Escaneado com camada de texto invisível: a redação do texto nativo tem de
     # apagar também os pixels da caixa inteira (não só uma faixa estreitada).
