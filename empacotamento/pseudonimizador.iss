@@ -112,10 +112,10 @@ begin
     MsgBox('Informe a pasta dos arquivos.', mbInformation, MB_OK);
     Result := False;
   end
-  else if DentroDe(PaginaPasta.Values[0], ExpandConstant('{app}')) or
+  else if DentroDe(PaginaPasta.Values[0], WizardDirValue) or
           DentroDe(PaginaPasta.Values[0], ExpandConstant('{localappdata}\Pseudonimizador')) then
   begin
-    // o desinstalador apaga essas duas pastas: os arquivos do usuário não podem ficar nelas
+    // WizardDirValue: a constante da pasta do programa ainda não existe nesta página. O desinstalador apaga essas duas pastas: os arquivos do usuário não podem ficar nelas
     MsgBox('A pasta dos arquivos não pode ficar dentro da pasta do programa nem da pasta de configurações do Pseudonimizador (a desinstalação poderia apagá-la). Escolha outra, como Documentos.', mbError, MB_OK);
     Result := False;
   end;

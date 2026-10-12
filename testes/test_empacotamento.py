@@ -609,8 +609,11 @@ def test_roteiro_do_mantenedor_cobre_montagem_aceitacao_e_limites():
 def test_iss_recusa_pasta_dentro_do_programa_ou_do_estado_e_versao_numerica():
     iss = _iss()
     prox = iss.split("function NextButtonClick")[1].split("\nend;")[0]
-    assert "{app}" in prox and "{localappdata}\\Pseudonimizador" in prox and "Lowercase(" in iss and "DentroDe(" in prox
+    assert "WizardDirValue" in prox and "{localappdata}\\Pseudonimizador" in prox and "Lowercase(" in iss and "DentroDe(" in prox
     assert "dentro da pasta do programa" in prox
+    assert "WizardDirValue" in prox and "ExpandConstant('{app}')" not in prox   # {app} ainda não existe aqui
+    antes = iss.split("procedure CurStepChanged")[0].split("[Code]")[1]
+    assert "{app}" not in antes.replace("WizardDirValue", "")
     assert "VersionInfoVersion={#VersaoNum}.0" in iss and "AppVersion={#Versao}" in iss
     assert "#ifndef VersaoNum" in iss
     args = construir.argumentos_iscc(Path("ISCC.exe"), Path("x.iss"), versao="0.3.0rc1", origem=Path("a"),
