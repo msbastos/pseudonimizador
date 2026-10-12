@@ -16,6 +16,7 @@ import fitz
 
 from ..leitura.ocr import ocr_pixmap
 from ..motor.mapa import normalizar
+from ..motor.pseudonimizador import CONECTIVOS
 
 FONTE_MINIMA = 4.0
 
@@ -149,13 +150,17 @@ def _estimar_ocr(documento, grupo: _Grupo, pagina=None) -> fitz.Rect:
     ink = _palavras_das_colunas(x0, tinta, linha.height)
     # cada lado se alarga em meio corpo de linha (um caractere médio), mas o
     # alargamento só avança por espaço em branco: não entra em palavra da
-    # imagem que o núcleo não toca (o rótulo vizinho, como "Nome:", fica)
+    # imagem que o núcleo não toca (o rótulo vizinho, como "Nome:", fica).
+    # "Tocar" é sobrepor: a palavra que termina antes do início do núcleo, mesmo
+    # a uma fração de ponto, é vizinha (o núcleo caído no vão logo depois de
+    # "Testemunha:" levava o rótulo inteiro); a estimativa curta demais é
+    # coberta pela conferência de _verificar_e_crescer.
     folga = linha.height * 0.5
     esq, dir_ = nucleo[0] - folga, nucleo[1] + folga
     for ini_p, fim_p in ink:
-        if fim_p < nucleo[0] - 1:
+        if fim_p <= nucleo[0]:
             esq = max(esq, min(fim_p + 1.5, nucleo[0]))
-        elif ini_p > nucleo[1] + 1:
+        elif ini_p >= nucleo[1]:
             dir_ = min(dir_, max(ini_p - 1.5, nucleo[1]))
     caixa = fitz.Rect(esq, linha.y0, dir_, linha.y1)
     palavras = [m.span() for m in re.finditer(r"\S+", texto[a:b])]
@@ -268,8 +273,9 @@ def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: l
     O recorte da linha (caixa do OCR com folga) é lido com todas as redações
     planejadas da página pintadas de branco. Uma palavra do trecho conta como
     legível quando aparece no recorte mais vezes do que no resto da linha
-    (fora dos trechos) ou, se também aparece no resto, quando aparece ao menos
-    uma vez (não dá para saber se a lida é a do resto ou a do trecho).
+    (fora dos trechos). Os conectivos do motor (da, de, do, das, dos, e) não
+    são conferidos: são comuns no resto da linha ("residente da cidade") e,
+    sozinhos, não identificam ninguém.
     Enquanto houver palavra legível, a caixa do trecho culpado cresce uma
     palavra de tinta inteira para o lado em que ela falta (a primeira palavra
     do trecho legível: à esquerda; a última: à direita; outra: dos dois lados),
@@ -279,9 +285,9 @@ def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: l
     Leitura não confiável também leva à linha inteira (para todos os trechos
     da linha): recorte lido vazio havendo texto que devia continuar à vista;
     menos da metade das palavras (de 3 letras ou mais) do resto lidas; ou uma
-    palavra do trecho que também está no resto lida menos vezes do que no
-    resto. Linha só com os trechos e recorte vazio é o esperado: a caixa vira
-    a linha inteira sem aviso (nada mais se perde).
+    palavra do trecho (fora os conectivos) que também está no resto lida menos
+    vezes do que no resto. Linha só com os trechos e recorte vazio é o
+    esperado: a caixa vira a linha inteira sem aviso (nada mais se perde).
 
     Limites conhecidos: parte de 2 ou 3 letras grudada no vizinho sem
     pontuação ("NomeSá") não é achada (as de 4 ou mais são, por trecho da
@@ -300,7 +306,8 @@ def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: l
     resto = normalizar("".join(resto))
     resto_palavras = re.findall(r"\w+", resto)
     resto_longas = [p for p in resto_palavras if len(p) >= 3]
-    palavras = {id(item): re.findall(r"\w+", normalizar(texto_linha[item.trecho[0] - a:item.trecho[1] - a]))
+    palavras = {id(item): [p for p in re.findall(r"\w+", normalizar(texto_linha[item.trecho[0] - a:item.trecho[1] - a]))
+                           if p not in CONECTIVOS]
                 for item in da_linha}
     tinta = _palavras_na_imagem(pagina, linha)
     motivo = "o trecho continuava legível"
@@ -328,7 +335,7 @@ def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: l
                 if len(p) < 2:
                     continue
                 no_lido, no_resto = _ocorrencias(p, lido), _ocorrencias(p, resto)
-                if no_lido > no_resto or (no_resto and no_lido):
+                if no_lido > no_resto:
                     lidas.add(k)
             if lidas:
                 por_item.append((item, lidas))

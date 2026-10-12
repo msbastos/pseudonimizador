@@ -78,6 +78,30 @@ def test_imagem_grande_com_texto_sem_ocr_gera_aviso():
     assert any("não foi lida por OCR" in a for a in d.avisos)
 
 
+def test_imagem_pequena_colada_com_texto_passa_pelo_ocr():
+    # identidade colada (~16% da página) numa página com bastante texto nativo
+    caminho = F.contrato_com_documento_colado(F.pasta_temporaria("leitura_pdf8") / "colado.pdf")
+    d = ler_pdf(caminho, ocr=_ocr_falso)
+    assert d.paginas_ocr == [0] and d.tipo == "pdf_misto"
+    assert "Fulano Teste" in d.texto and F.CPF in d.texto
+    sem = ler_pdf(caminho)
+    assert sem.paginas_ocr == [] and any("página 1 tem imagem que não foi lida por OCR" in a for a in sem.avisos)
+
+
+def test_imagem_minuscula_nao_passa_pelo_ocr():
+    # imagem de menos de 3% da página (um ícone) não obriga o OCR
+    caminho = F.pasta_temporaria("leitura_pdf9") / "icone.pdf"
+    doc = fitz.open()
+    pagina = doc.new_page(width=595, height=842)
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 8, 8), False)
+    pagina.insert_image(fitz.Rect(500, 40, 540, 80), pixmap=pix)
+    pagina.insert_text((72, 72), "Texto nativo do documento de teste, com mais de vinte caracteres",
+                       fontname="helv", fontsize=11)
+    doc.save(str(caminho))
+    d = ler_pdf(caminho, ocr=_ocr_falso)
+    assert d.paginas_ocr == [] and not d.avisos
+
+
 def test_pdf_com_senha_levanta_erro():
     caminho = F.pasta_temporaria("leitura_pdf7") / "s.pdf"
     doc = fitz.open()

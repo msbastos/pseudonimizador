@@ -54,7 +54,12 @@ def _linhas_ocr(n: int, linhas, partes: list[str], origens: list) -> None:
         partes.append("\n"); origens.append(None)
 
 
-COBERTURA_IMAGEM = 0.5   # imagem que cobre tanto da página é digitalização do corpo
+# Imagem que cobre ao menos 3% da página passa pelo OCR, mesmo com texto
+# nativo farto: um documento colado (identidade, comprovante) costuma ocupar
+# de 10% a 20% da página; abaixo disso ficam ícones e enfeites. Antes o limite
+# era 50% (só a digitalização do corpo), e o documento colado passava sem ser
+# lido nem conferido. Apagar demais é aceitável; deixar dado à vista, não.
+COBERTURA_IMAGEM = 0.03
 
 
 def _cobertura(pagina) -> float:
@@ -70,8 +75,10 @@ def _cobertura(pagina) -> float:
 
 def ler_pdf(caminho: Path, ocr=None) -> Documento:
     """Lê o PDF caractere a caractere. Páginas sem imagem são lidas do texto
-    nativo, qualquer que seja o tamanho. Páginas com imagem que cobre metade
-    da página, ou com pouco texto nativo, passam pelo OCR quando ele é dado.
+    nativo, qualquer que seja o tamanho. Páginas com imagens que somam ao
+    menos COBERTURA_IMAGEM (3%) da página, ou com pouco texto nativo e alguma
+    imagem, passam pelo OCR quando ele é dado (texto nativo + linhas do OCR);
+    sem OCR, ficam num aviso.
 
     `ocr(pagina) -> list[tuple[str, fitz.Rect]]`: uma entrada por linha de texto,
     com o retângulo em pontos do PDF, no mesmo sistema de coordenadas de

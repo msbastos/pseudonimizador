@@ -101,6 +101,25 @@ def contrato_pdf(caminho: Path, girar: int = 0) -> Path:
     return caminho
 
 
+def contrato_com_documento_colado(caminho: Path) -> Path:
+    """Contrato com texto nativo e, abaixo dele, a imagem de um documento de
+    identidade colado (cerca de 16% da página) com o nome e o CPF."""
+    import fitz
+    doc = fitz.open()
+    pagina = doc.new_page(width=595, height=842)
+    _pdf_de_linhas(pagina)
+    cartao = fitz.open()
+    face = cartao.new_page(width=360, height=220)
+    face.draw_rect(face.rect, color=(0.4, 0.4, 0.4), fill=(0.95, 0.95, 0.95))
+    face.insert_text((20, 50), "CARTEIRA DE IDENTIDADE", fontsize=16, fontname="helv")
+    face.insert_text((20, 110), PESSOA_1, fontsize=18, fontname="helv")
+    face.insert_text((20, 160), f"CPF {CPF}", fontsize=18, fontname="helv")
+    pagina.insert_image(fitz.Rect(80, 400, 440, 620), pixmap=face.get_pixmap(dpi=200))
+    caminho = Path(caminho)
+    doc.save(str(caminho))
+    return caminho
+
+
 def contrato_escaneado(caminho: Path) -> Path:
     """Página só com imagem (sem camada de texto), como um papel digitalizado."""
     import fitz

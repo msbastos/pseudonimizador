@@ -378,8 +378,9 @@ def test_ocr_leitura_vazia_da_conferencia_apaga_a_linha_inteira():
 
 def test_ocr_palavra_repetida_na_linha_nao_mascara_o_nome():
     # "Lima" da pessoa e "Lima" da empresa na mesma linha: ler "lima" no recorte
-    # não pode ser atribuído só à empresa. Resultado fail-closed: a caixa cresce
-    # até a linha inteira e o "Lima" da pessoa sai.
+    # não pode ser atribuído só à empresa. A palavra que também está no resto só
+    # conta como apagada quando é lida no máximo tantas vezes quanto no resto
+    # (aqui, uma: a da empresa); o "Lima" da pessoa sai.
     pasta = F.pasta_temporaria("saida_pdf_palavra_repetida")
     fonte = fitz.open()
     pagina = fonte.new_page(width=595, height=842)
@@ -407,7 +408,10 @@ def test_ocr_palavra_repetida_na_linha_nao_mascara_o_nome():
         pdf_layout._verificar_e_crescer = original
     (linha, redacoes), = capturas
     assert redacoes[0].x0 <= lima_pessoa.x0 and redacoes[0].x1 >= lima_pessoa.x1 - 3, (redacoes, lima_pessoa)
-    assert any("linha inteira" in a for a in avisos), avisos
+    assert isinstance(avisos, list)
+    with fitz.open(str(pasta / "rep - pseudonimizado.pdf")) as pdf:
+        lido = normalizar(" ".join(t for t, _ in ocr_pagina(pdf[0])))
+    assert len(re.findall(r"(?<!\w)lima(?!\w)", lido)) <= 1 and not re.search(r"(?<!\w)ana(?!\w)", lido), lido
 
 
 def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():
@@ -434,6 +438,53 @@ def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():
         lidas = _palavras(pdf)
     for parte in ("maria", "aparecida", "pereira", "111", "444", "777", "35"):
         assert parte not in lidas, (parte, lidas)
+
+
+def test_ocr_conectivo_do_nome_nao_apaga_a_linha_inteira():
+    # "da" do nome também aparece no resto da linha ("residente da cidade"): o
+    # conectivo não entra na conferência, e a linha não é apagada inteira.
+    pasta = F.pasta_temporaria("saida_pdf_conectivo")
+    linhas = ["Locador: conforme qualificação acima.",
+              "Testemunha: Maria da Silva Pereira, residente da cidade de Porto Alegre."]
+
+    def escrever(pagina):
+        for k, l in enumerate(linhas):
+            pagina.insert_text((60, 100 + 30 * k), l, fontsize=13, fontname="helv")
+
+    _, doc, _, _ = _imagem_da_pagina(None, None, escrever)
+    caminho = pasta / "conectivo.pdf"
+    doc.save(str(caminho))
+    documento = ler_pdf(caminho, ocr=ocr_pagina)
+    ini = documento.texto.index("Maria")
+    fim = documento.texto.index("Pereira") + len("Pereira")
+    assert documento.texto[ini:fim] == "Maria da Silva Pereira", documento.texto
+    destino = pasta / "conectivo - pseudonimizado.pdf"
+    avisos = gerar_pdf_layout(documento, [Troca(ini, fim, "[[PESSOA_1]]")], destino)
+    with fitz.open(str(destino)) as pdf:
+        lidas = _palavras(pdf)
+    for parte in ("maria", "silva", "pereira"):
+        assert parte not in lidas, (parte, lidas)
+    for parte in ("locador", "testemunha", "porto", "alegre", "residente", "cidade"):
+        assert parte in lidas, (parte, lidas)
+    assert not any("linha inteira" in a for a in avisos), avisos
+
+
+def test_documento_colado_em_pagina_de_texto_e_apagado():
+    # Identidade colada (~16% da página) numa página de texto nativo: a imagem
+    # passa pelo OCR e o nome e o CPF dela não podem continuar legíveis.
+    from pseudonimizador.saida import gerar
+    pasta = F.pasta_temporaria("saida_pdf_colado")
+    documento = ler(F.contrato_com_documento_colado(pasta / "colado.pdf"))
+    assert documento.paginas_ocr == [0]
+    g = gerar(documento, Revisao(documento).fechar(), formato="layout", modo="definitivo",
+              pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    with fitz.open(str(g.saida)) as pdf:
+        lidas = _palavras(pdf)
+        nativo = pdf[0].get_text()
+    for parte in ("maria", "aparecida", "pereira", "111", "444", "777"):
+        assert parte not in lidas, (parte, lidas)
+    assert F.PESSOA_1 not in nativo and F.CPF not in nativo
+    assert "identidade" in lidas, lidas
 
 
 if __name__ == "__main__":
