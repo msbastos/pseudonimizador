@@ -9,9 +9,13 @@ import bisect
 import os
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
+
+from ..leitura.ocr import ocr_pixmap
+from ..motor.mapa import normalizar
 
 FONTE_MINIMA = 4.0
 
@@ -83,6 +87,19 @@ def _palavras_na_imagem(pagina, linha: fitz.Rect) -> list[tuple[float, float]]:
     return _palavras_das_colunas(x0, tinta, linha.height)
 
 
+def _linha_ocr(documento, grupo: _Grupo) -> tuple[int, int, fitz.Rect]:
+    """(início, fim no texto, caixa) da linha do OCR que contém o grupo."""
+    texto = documento.texto
+    a = texto.rfind(chr(10), 0, grupo.ini) + 1
+    b = texto.find(chr(10), grupo.fim)
+    b = len(texto) if b < 0 else b
+    linha = fitz.Rect(documento.origens[a].rect)
+    for o in documento.origens[a:b]:
+        if o is not None:
+            linha |= fitz.Rect(o.rect)
+    return a, b, linha
+
+
 def _estimar_ocr(documento, grupo: _Grupo, pagina=None) -> fitz.Rect:
     """Caixa estimada do trecho numa linha do OCR. Sem a página, a linha é
     dividida em partes proporcionais à largura dos caracteres (Helvetica).
@@ -95,17 +112,11 @@ def _estimar_ocr(documento, grupo: _Grupo, pagina=None) -> fitz.Rect:
     imagem que o núcleo não toca (o rótulo vizinho fica). Com o mesmo número de
     palavras no texto e na imagem, as palavras da imagem de mesmo índice que as
     do trecho entram. Depois, _caixa_ocr une as palavras inteiras que a tocam.
-    Limite conhecido: tinta que o OCR não leu (rabisco) desloca a estimativa
-    em até a sua largura; se o núcleo cair em palavra vizinha, ela é apagada
-    inteira (excesso, não vazamento)."""
+    Limite conhecido: tinta que o OCR não leu (rabisco, barra, sublinhado)
+    desloca a estimativa; por isso a área é só o ponto de partida, e
+    _verificar_e_crescer confere com o próprio OCR antes de aplicar."""
     texto = documento.texto
-    a = texto.rfind(chr(10), 0, grupo.ini) + 1
-    b = texto.find(chr(10), grupo.fim)
-    b = len(texto) if b < 0 else b
-    linha = fitz.Rect(documento.origens[a].rect)
-    for o in documento.origens[a:b]:
-        if o is not None:
-            linha |= fitz.Rect(o.rect)
+    a, b, linha = _linha_ocr(documento, grupo)
     larguras = [fitz.get_text_length(c, fontname="helv", fontsize=1) or 0.3 for c in texto[a:b]]
     total = sum(larguras)
     antes = sum(larguras[:grupo.ini - a])
@@ -196,6 +207,113 @@ def _retangulos(pagina, grupo: list, cheio: bool = False, estimada: fitz.Rect | 
     return redacao, caixa
 
 
+@dataclass
+class _Item:
+    """Uma redação planejada: área a apagar, área do tóken e, para o OCR, a
+    linha (início e fim no texto) e o trecho (início e fim) a que pertence."""
+    redacao: fitz.Rect
+    area: fitz.Rect
+    token: str
+    ocr: bool
+    linha: tuple[int, int] | None = None
+    caixa_linha: fitz.Rect | None = None
+    trecho: tuple[int, int] = (0, 0)
+
+
+VOLTAS = 3          # alargamentos de uma palavra de tinta antes de apagar a linha inteira
+FOLGA_RECORTE = 2   # pontos em volta da caixa da linha do OCR na conferência
+
+
+def _ocorrencias(palavra: str, texto: str) -> int:
+    """Quantas vezes a palavra (normalizada) aparece no texto normalizado: como
+    palavra inteira; as de 4 letras ou mais também grudadas em outra (o OCR às
+    vezes junta palavras que a redação aproximou)."""
+    if len(palavra) >= 4:
+        return texto.count(palavra)
+    return len(re.findall(rf"(?<!\w){re.escape(palavra)}(?!\w)", texto))
+
+
+def _ler_recorte(pagina, recorte: fitz.Rect, apagar: list[fitz.Rect]) -> str:
+    """OCR do recorte da página como ficaria depois da redação: as áreas de
+    `apagar` são pintadas de branco só na memória (o PDF não muda)."""
+    pix = pagina.get_pixmap(dpi=DPI, clip=recorte, colorspace=fitz.csRGB, alpha=False)
+    escala = fitz.Matrix(DPI / 72, DPI / 72)
+    for r in apagar:
+        ir = (r * escala).irect & pix.irect
+        if not ir.is_empty:
+            pix.set_rect(ir, (255, 255, 255))
+    return normalizar(" ".join(ocr_pixmap(pix)))
+
+
+def _uma_palavra_a_mais(caixa: fitz.Rect, tinta: list[tuple[float, float]],
+                        esquerda: bool = True, direita: bool = True) -> fitz.Rect:
+    """A caixa alargada até a palavra de tinta seguinte do lado pedido (inteira,
+    também a que a borda corta)."""
+    nova = fitz.Rect(caixa)
+    antes = [p for p in tinta if p[0] < caixa.x0 - 0.5]
+    depois = [p for p in tinta if p[1] > caixa.x1 + 0.5]
+    if esquerda and antes:
+        nova.x0 = min(nova.x0, max(antes)[0] - 1)
+    if direita and depois:
+        nova.x1 = max(nova.x1, min(depois, key=lambda p: p[1])[1] + 1)
+    return nova
+
+
+def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: list[_Item],
+                         todas: list[_Item]) -> bool:
+    """Confere com o próprio OCR, antes de aplicar a redação, se alguma palavra
+    (de 2 letras ou mais) dos trechos desta linha do OCR continua legível.
+
+    O recorte da linha (caixa do OCR com folga) é lido com todas as redações
+    planejadas da página pintadas de branco. Uma palavra do trecho conta como
+    legível quando aparece no recorte mais vezes do que no resto da linha
+    (fora dos trechos), para não confundir o rótulo vizinho com o nome.
+    Enquanto houver palavra legível, a caixa do trecho culpado cresce uma
+    palavra de tinta inteira para o lado em que ela falta (a primeira palavra
+    do trecho legível: à esquerda; a última: à direita; outra: dos dois lados),
+    até VOLTAS vezes; se ainda sobrar (ou não houver mais tinta para tomar), a
+    caixa vira a linha inteira do OCR. Altera `redacao` dos itens; devolve True
+    se a linha inteira foi usada."""
+    recorte = (linha + (-FOLGA_RECORTE, -FOLGA_RECORTE, FOLGA_RECORTE, FOLGA_RECORTE)) & pagina.rect
+    a = da_linha[0].linha[0]
+    # o resto da linha: o texto do OCR com os trechos em branco
+    resto = list(texto_linha)
+    for item in da_linha:
+        for k in range(item.trecho[0] - a, item.trecho[1] - a):
+            resto[k] = " "
+    resto = normalizar("".join(resto))
+    palavras = {id(item): re.findall(r"\w+", normalizar(texto_linha[item.trecho[0] - a:item.trecho[1] - a]))
+                for item in da_linha}
+    tinta = _palavras_na_imagem(pagina, linha)
+    for volta in range(VOLTAS + 1):
+        lido = _ler_recorte(pagina, recorte, [i.redacao for i in todas if i.redacao.intersects(recorte)])
+        culpados: dict[int, tuple[_Item, set[int]]] = {}
+        for item in da_linha:
+            lidas = {k for k, p in enumerate(palavras[id(item)])
+                     if len(p) >= 2 and _ocorrencias(p, lido) > _ocorrencias(p, resto)}
+            if lidas:
+                culpados[id(item)] = (item, lidas)
+        if not culpados:
+            return False
+        mudou = False
+        if volta < VOLTAS:
+            for item, lidas in culpados.values():
+                ultima = len(palavras[id(item)]) - 1
+                esquerda = 0 in lidas or ultima not in lidas
+                direita = ultima in lidas or 0 not in lidas
+                nova = _uma_palavra_a_mais(item.redacao, tinta, esquerda, direita)
+                if nova == item.redacao:
+                    nova = _uma_palavra_a_mais(item.redacao, tinta)
+                mudou = mudou or nova != item.redacao
+                item.redacao = nova
+        if not mudou:
+            break
+    # ainda legível: a linha inteira do OCR
+    for item, _ in culpados.values():
+        item.redacao = item.redacao | recorte
+    return True
+
+
 def _escrever(pagina, area: fitz.Rect, token: str, n: int) -> str | None:
     tamanho = max(FONTE_MINIMA, area.height * 0.8)
     while tamanho >= FONTE_MINIMA:
@@ -217,7 +335,7 @@ def gerar_pdf_layout(documento, trocas, destino: Path) -> list[str]:
     tmp = destino.with_suffix(".pdf.tmp")
     pdf = fitz.open(str(documento.caminho))
     try:
-        por_pagina: dict[int, list[list]] = defaultdict(list)   # [redação, área, tóken, ocr]
+        por_pagina: dict[int, list[_Item]] = defaultdict(list)
         for t in trocas:
             for k, grupo in enumerate(_linhas(documento, t.ini, t.fim)):
                 n = grupo[0].pagina
@@ -232,24 +350,45 @@ def gerar_pdf_layout(documento, trocas, destino: Path) -> list[str]:
                     cheio = n in documento.paginas_ocr or any(
                         fitz.Rect(i["bbox"]).intersects(caixa) for i in pagina.get_image_info())
                 redacao, area = _retangulos(pagina, grupo, cheio, _estimar_ocr(documento, grupo, pagina) if grupo[0].ocr else None)
-                por_pagina[n].append([redacao, area, t.token if k == 0 else "", grupo[0].ocr])
+                item = _Item(redacao, area, t.token if k == 0 else "", grupo[0].ocr)
+                if grupo[0].ocr:
+                    a, b, item.caixa_linha = _linha_ocr(documento, grupo)
+                    item.linha = (a, b)
+                    item.trecho = (grupo.ini, grupo.fim)
+                por_pagina[n].append(item)
+        for n, itens in sorted(por_pagina.items()):
+            # cada linha do OCR com redação é conferida pelo próprio OCR antes de
+            # aplicar; na página girada (o recorte da imagem não está no mesmo
+            # sistema das caixas), a linha inteira do OCR é apagada direto
+            pagina = pdf[n]
+            linhas: dict[tuple[int, int], list[_Item]] = defaultdict(list)
+            for item in itens:
+                if item.ocr:
+                    linhas[item.linha].append(item)
+            for (a, b), da_linha in linhas.items():
+                caixa = da_linha[0].caixa_linha
+                if pagina.rotation:
+                    for item in da_linha:
+                        item.redacao |= caixa + (-FOLGA_RECORTE, -FOLGA_RECORTE, FOLGA_RECORTE, FOLGA_RECORTE)
+                elif _verificar_e_crescer(pagina, documento.texto[a:b], caixa, da_linha, itens):
+                    avisos.append(f"página {n + 1}: linha inteira do OCR apagada (o trecho continuava legível)")
         for itens in por_pagina.values():
             # o mesmo nome no texto nativo e no OCR (PDF pesquisável): um só tóken,
             # o da cópia nativa; a cópia do OCR é apagada sem escrever por cima
-            nativos = [i[1] for i in itens if not i[3]]
+            nativos = [i.area for i in itens if not i.ocr]
             for i in itens:
-                if i[3] and i[2] and any(
-                        (i[1] & a).get_area() > 0.5 * min(i[1].get_area(), a.get_area()) for a in nativos):
-                    i[2] = ""
+                if i.ocr and i.token and any(
+                        (i.area & a).get_area() > 0.5 * min(i.area.get_area(), a.get_area()) for a in nativos):
+                    i.token = ""
         for n, itens in sorted(por_pagina.items()):
             pagina = pdf[n]
-            for redacao, _, _, _ in itens:
-                pagina.add_redact_annot(redacao, fill=(1, 1, 1))
+            for item in itens:
+                pagina.add_redact_annot(item.redacao, fill=(1, 1, 1))
             pagina.apply_redactions(images=fitz.PDF_REDACT_IMAGE_PIXELS,
                                     graphics=fitz.PDF_REDACT_LINE_ART_NONE,
                                     text=fitz.PDF_REDACT_TEXT_REMOVE)
-            for _, area, token, _ in itens:
-                if token and (aviso := _escrever(pagina, area, token, n)):
+            for item in itens:
+                if item.token and (aviso := _escrever(pagina, item.area, item.token, n)):
                     avisos.append(aviso)
         pdf.set_metadata({})
         pdf.del_xml_metadata()

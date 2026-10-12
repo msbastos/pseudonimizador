@@ -62,6 +62,22 @@ def test_escaneado_pixels_apagados():
     assert "locador" in lidas, lidas
 
 
+def test_escaneado_girado_apaga_a_linha_inteira():
+    # Página escaneada com /Rotate 90: sem conferência pelo recorte, a linha
+    # do OCR que tem o trecho é apagada inteira.
+    pasta = F.pasta_temporaria("saida_pdf_ocr_girado")
+    caminho = F.contrato_escaneado(pasta / "eg.pdf")
+    with fitz.open(str(caminho)) as pdf:
+        pdf[0].set_rotation(90)
+        pdf.saveIncr()
+    destino, _ = _gerar(caminho, "eg - pseudonimizado.pdf")
+    with fitz.open(str(destino)) as pdf:
+        lidas = _palavras(pdf)
+    for parte in ("maria", "aparecida", "pereira", "111", "444", "777", "35"):
+        assert parte not in lidas, (parte, lidas)
+    assert "cláusula" in lidas or "clausula" in lidas, lidas
+
+
 def _imagem_da_pagina(origem, destino, escrever):
     """PDF de uma página só com a imagem do que `escrever(pagina)` desenhou."""
     fonte = fitz.open()
@@ -222,6 +238,109 @@ def test_ocr_caixa_alta_do_ocr_cobre_a_tinta_com_vao():
                 pdf[0], grupos[0], False, pdf_layout._estimar_ocr(documento, grupos[0], pdf[0]))
         for r in alvo:
             assert redacao.x0 <= r.x0 + 0.3 and redacao.x1 >= r.x1 - 0.3 - (1.5 if r is alvo[2] else 0), (vao, redacao, r)
+
+
+CAUDA_SA = "brasileira, casada, residente na Rua das Flores, 12"
+
+
+def _pagina_nome_curto(pasta, nome, vao, amplitude):
+    """Imagem (200 dpi) de uma linha em Times 12: "Nome:" em x=60, um vão de
+    `vao` pt com um zigue-zague de 16 pt de largura (traço de 1 pt, altura
+    `amplitude`) no meio, o nome com 6 pt entre as palavras e a cauda."""
+    fonte = fitz.open()
+    pagina = fonte.new_page(width=595, height=842)
+    pagina.insert_text((60, 100), "Nome:", fontsize=12, fontname="tiro")
+    x = 60 + fitz.get_text_length("Nome:", fontname="tiro", fontsize=12) + vao
+    c = x - vao / 2
+    pagina.draw_polyline([(c - 8, 99), (c - 4, 99 - amplitude), (c, 99), (c + 4, 99 - amplitude), (c + 8, 99)],
+                         color=(0, 0, 0), width=1)
+    for palavra in nome:
+        pagina.insert_text((x, 100), palavra, fontsize=12, fontname="tiro")
+        x += fitz.get_text_length(palavra, fontname="tiro", fontsize=12) + 6
+    pagina.insert_text((x, 100), CAUDA_SA, fontsize=12, fontname="tiro")
+    pix = pagina.get_pixmap(dpi=200)
+    doc = fitz.open()
+    nova = doc.new_page(width=595, height=842)
+    nova.insert_image(nova.rect, pixmap=pix)
+    caminho = pasta / f"curto{len(nome)}_{vao}_{amplitude}.pdf"
+    doc.save(str(caminho))
+    return caminho
+
+
+def test_ocr_real_ultima_palavra_curta_nao_fica_a_vista():
+    # A última palavra curta do nome ("Sá,") ficava legível: o rabisco não lido
+    # desloca a estimativa e o alargamento parava antes dela. O próprio OCR
+    # confere a redação antes de aplicá-la.
+    from pseudonimizador.leitura.ocr import ocr_pagina as ocr
+    for nome in (["Maria", "Aparecida", "Sá,"], ["Ana", "Sá,"]):
+        partes = [normalizar(p.rstrip(",")) for p in nome]
+        for vao in (30, 40, 55):
+            for amplitude in (3, 7):
+                pasta = F.pasta_temporaria(f"saida_pdf_curto_{len(nome)}_{vao}_{amplitude}")
+                caminho = _pagina_nome_curto(pasta, nome, vao, amplitude)
+                documento = ler_pdf(caminho, ocr=ocr)
+                alvo = " ".join(nome).rstrip(",")
+                ini = documento.texto.find(alvo)
+                assert ini >= 0, (nome, vao, amplitude, documento.texto)
+                destino = pasta / "curto - pseudonimizado.pdf"
+                avisos = gerar_pdf_layout(documento, [Troca(ini, ini + len(alvo), "[[PESSOA_1]]")], destino)
+                with fitz.open(str(destino)) as pdf:
+                    lidas = _palavras(pdf)
+                for parte in partes:
+                    assert parte not in lidas, (nome, vao, amplitude, parte, lidas)
+                if not any("linha inteira" in a for a in avisos):
+                    assert "nome" in lidas, (nome, vao, amplitude, lidas, avisos)
+
+
+def _documento_com_marca(pasta, nome, marca, largura):
+    """Linha "Contratante: <nome> CPF" em Times 12 (6 pt entre palavras) com uma
+    marca que o OCR não leu (barra preta ou sublinhado de `largura` pt) depois
+    do texto, dentro da caixa da linha do OCR. O Documento é montado à mão,
+    como o leitor faria: caixa da linha dividida em partes iguais."""
+    fonte = fitz.open()
+    pagina = fonte.new_page(width=595, height=842)
+    palavras = ["Contratante:"] + nome + ["CPF"]
+    x = 60
+    for p in palavras:
+        pagina.insert_text((x, 100), p, fontsize=12, fontname="tiro")
+        x += fitz.get_text_length(p, fontname="tiro", fontsize=12) + 6
+    if marca == "barra":
+        pagina.draw_rect(fitz.Rect(x, 91, x + largura, 102), color=(0, 0, 0), fill=(0, 0, 0))
+    else:
+        pagina.draw_line((x, 102), (x + largura, 102), color=(0, 0, 0), width=1)
+    r0 = pagina.search_for("Contratante:")[0]
+    pix = pagina.get_pixmap(dpi=200)
+    doc = fitz.open()
+    nova = doc.new_page(width=595, height=842)
+    nova.insert_image(nova.rect, pixmap=pix)
+    caminho = pasta / f"marca_{marca}_{largura}.pdf"
+    doc.save(str(caminho))
+    texto = " ".join(palavras)
+    centro = (r0.y0 + r0.y1) / 2
+    caixa = fitz.Rect(r0.x0 - 3, centro - 8.5, x + largura + 3, centro + 8.5)
+    w = caixa.width / len(texto)
+    origens = [OrigemPdf(0, (caixa.x0 + w * k, caixa.y0, caixa.x0 + w * (k + 1), caixa.y1), True)
+               for k in range(len(texto))] + [None]
+    documento = Documento(caminho=caminho, tipo="pdf_ocr", texto=texto + chr(10), origens=origens, paginas_ocr=[0])
+    ini = texto.index(" ".join(nome))
+    return documento, Troca(ini, ini + len(" ".join(nome)), "[[PESSOA_1]]")
+
+
+def test_ocr_marca_nao_lida_depois_do_nome_nao_deixa_nome_a_vista():
+    # Barra ou sublinhado depois do nome, dentro da caixa do OCR: a tinta que o
+    # OCR não leu desloca a estimativa; a conferência pelo OCR cobre o nome.
+    for nome in (["Ana", "Lima"], ["Zé", "Lima"]):
+        partes = [normalizar(p) for p in nome]
+        for marca in ("barra", "sublinhado"):
+            for largura in (80, 200):
+                pasta = F.pasta_temporaria(f"saida_pdf_marca_{len(nome[0])}_{marca}_{largura}")
+                documento, troca = _documento_com_marca(pasta, nome, marca, largura)
+                destino = pasta / "marca - pseudonimizado.pdf"
+                gerar_pdf_layout(documento, [troca], destino)
+                with fitz.open(str(destino)) as pdf:
+                    lidas = _palavras(pdf)
+                for parte in partes:
+                    assert parte not in lidas, (nome, marca, largura, parte, lidas)
 
 
 def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():

@@ -31,3 +31,14 @@ def ocr_pagina(pagina, dpi: int = 200) -> list[tuple[str, "fitz.Rect"]]:
         linhas.append((str(texto), rect))
     linhas.sort(key=lambda l: (round(l[1].y0 / 5), l[1].x0))
     return linhas
+
+
+def ocr_pixmap(pix, margem: int = 16) -> list[str]:
+    """Textos que o OCR lê num pixmap RGB sem alfa (um recorte da página, por
+    exemplo), com uma margem branca em volta para o detector achar as linhas."""
+    imagem = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+    imagem = np.pad(imagem, ((margem, margem), (margem, margem), (0, 0)), constant_values=255)
+    resultado = _motor()(imagem)
+    if resultado is None or resultado.txts is None:
+        return []
+    return [str(t) for t in resultado.txts]
