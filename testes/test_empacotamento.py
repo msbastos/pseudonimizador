@@ -489,6 +489,17 @@ def test_build_de_teste_tem_outro_nome_e_o_iscc_recebe_o_nome():
     assert "/FPseudonimizador-Setup-TESTE" in args
 
 
+def test_sha256sums_gravado_sem_cr_confere_com_sha256sum():
+    # o sha256sum -c (Linux, Git Bash) trata o \r como parte do nome do arquivo
+    with tempfile.TemporaryDirectory() as d:
+        setup = Path(d) / "Pseudonimizador-Setup.exe"
+        setup.write_bytes(b"instalador")
+        arq = construir.gravar_sha256sums(Path(d), setup)
+        bruto = arq.read_bytes()
+        assert b"\r" not in bruto
+        assert bruto == (hashlib.sha256(b"instalador").hexdigest() + "  Pseudonimizador-Setup.exe\n").encode()
+
+
 def test_linha_do_sha256sums_e_o_wsb_substitui_o_dist():
     dados = b"instalador"
     assert construir.linha_sha256sums("Pseudonimizador-Setup.exe", dados) == \

@@ -55,6 +55,14 @@ def linha_sha256sums(nome: str, dados: bytes) -> str:
     return f"{hashlib.sha256(dados).hexdigest()}  {nome}\n"
 
 
+def gravar_sha256sums(dist: Path, setup: Path) -> Path:
+    """Grava dist/SHA256SUMS.txt em bytes, com quebra LF: o sha256sum -c leria
+    o \\r do Windows como parte do nome do arquivo."""
+    arq = Path(dist) / "SHA256SUMS.txt"
+    arq.write_bytes(linha_sha256sums(setup.name, setup.read_bytes()).encode("utf-8"))
+    return arq
+
+
 def ler_python_embarcavel(toml: Path) -> dict:
     d = tomllib.loads(Path(toml).read_text(encoding="utf-8"))
     for k in ("versao", "url", "sha256"):
@@ -310,7 +318,7 @@ def main(argv=None) -> int:
     if teste:
         print(f"TESTE: {setup}; sem SHA256SUMS.txt; não publique. Sandbox: {build / 'Pseudonimizador-Sandbox.wsb'}")
         return 0
-    (dist / "SHA256SUMS.txt").write_text(linha_sha256sums(setup.name, setup.read_bytes()), encoding="utf-8")
+    gravar_sha256sums(dist, setup)
     print(f"pronto: {setup} ({setup.stat().st_size // 1_000_000} MB) e SHA256SUMS.txt em {dist}; "
           f"Pseudonimizador-Sandbox.wsb em {build}")
     return 0
