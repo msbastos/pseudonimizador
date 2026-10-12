@@ -82,6 +82,68 @@ def test_manifesto_do_repositorio_real_e_limpo():
     assert not any(p.parts[0] in ("testes", "saida_testes", "docs", "empacotamento") for p in rel)
 
 
+from empacotamento import gerar_lock  # noqa: E402
+
+
+def test_lock_troca_o_opencv_pelo_headless_e_tira_o_sympy():
+    wheels = [Path(n) for n in ("opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl",
+                                "opencv_python_headless-5.0.0.93-cp37-abi3-win_amd64.whl",
+                                "sympy-1.14.0-py3-none-any.whl", "mpmath-1.3.0-py3-none-any.whl",
+                                "onnxruntime-1.24.4-cp314-cp314-win_amd64.whl", "numpy-2.5.4-cp314-cp314-win_amd64.whl")]
+    assert gerar_lock.nome_e_versao(wheels[0]) == ("opencv-python", "5.0.0.93")
+    restantes = [w.name for w in gerar_lock.filtrar(wheels)]
+    assert "opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl" not in restantes
+    assert not any(w.startswith(("sympy-", "mpmath-")) for w in restantes)
+    assert "opencv_python_headless-5.0.0.93-cp37-abi3-win_amd64.whl" in restantes and len(restantes) == 3
+    assert gerar_lock.problemas_do_lock({"onnxruntime", "opencv-python-headless"}) == []
+    assert gerar_lock.problemas_do_lock({"onnxruntime", "opencv-python"})            # faltou o headless, sobrou o cheio
+    assert gerar_lock.problemas_do_lock({"onnxruntime", "opencv-python-headless", "sympy"})
+
+
+def test_lock_tem_hash_por_wheel_e_e_gerado_sem_rede_com_baixar_falso():
+    import hashlib
+    with tempfile.TemporaryDirectory() as d:
+        a = Path(d) / "numpy-2.5.4-cp314-cp314-win_amd64.whl"
+        a.write_bytes(b"roda falsa")
+        linhas = gerar_lock.linhas_do_lock([a])
+        assert linhas[0] == "numpy==2.5.4 \\" and linhas[1] == f"    --hash=sha256:{hashlib.sha256(b'roda falsa').hexdigest()}"
+        raiz = Path(d) / "repo"
+        raiz.mkdir()
+        (raiz / "requirements.txt").write_text("rapidocr==3.9.2\n", encoding="utf-8")
+        chamadas = []
+
+        def baixar(destino, argumentos):
+            chamadas.append(argumentos)
+            if "-r" in argumentos:
+                for n in ("opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl", "rapidocr-3.9.2-py3-none-any.whl",
+                          "onnxruntime-1.24.4-cp314-cp314-win_amd64.whl", "sympy-1.14.0-py3-none-any.whl"):
+                    (destino / n).write_bytes(b"x")
+            else:
+                (destino / "opencv_python_headless-5.0.0.93-cp37-abi3-win_amd64.whl").write_bytes(b"y")
+        assert gerar_lock.main(["--raiz", str(raiz)], baixar=baixar) == 0
+        texto = (raiz / "requirements.lock").read_text(encoding="utf-8")
+    assert "opencv-python-headless==5.0.0.93" in texto and "opencv-python==" not in texto and "sympy" not in texto
+    assert texto.count("--hash=sha256:") == 3 and "NÃO editar" in texto
+    assert chamadas[1][:2] == ["--no-deps", "opencv-python-headless==5.0.0.93"]   # a mesma versão do wheel cheio
+
+
+def test_requirements_lock_do_repositorio_esta_coerente():
+    texto = (RAIZ / "requirements.lock").read_text(encoding="utf-8")
+    pacotes = [l.split("==")[0] for l in texto.splitlines() if "==" in l]
+    assert {"pymupdf", "python-docx", "rapidocr", "onnxruntime", "numpy", "opencv-python-headless"} <= set(pacotes)
+    assert len(pacotes) == texto.count("--hash=sha256:"), "todo pacote do lock leva o seu hash"
+    assert "opencv-python==" not in texto
+    # Se a Task 5 desfizer a redução (fumaça falhou sem sympy), retire a linha abaixo e diga o motivo no commit.
+    assert "sympy" not in texto
+
+
+def test_python_embarcavel_tem_versao_url_e_hash():
+    from empacotamento import construir
+    d = construir.ler_python_embarcavel(RAIZ / "empacotamento" / "python-embarcavel.toml")
+    assert d["versao"].startswith("3.14.") and d["url"] == f"https://www.python.org/ftp/python/{d['versao']}/python-{d['versao']}-embed-amd64.zip"
+    assert len(d["sha256"]) == 64 and int(d["sha256"], 16) > 0 and d["sha256"] != "0" * 64
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

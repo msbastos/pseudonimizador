@@ -1,0 +1,54 @@
+# Gerado por empacotamento/gerar_lock.py — NÃO editar à mão.
+# Python 3.14 x64 Windows. Instalar com:
+#   python -m pip install --no-deps --require-hashes -r requirements.lock
+
+certifi==2026.7.22 \
+    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
+charset-normalizer==3.5.2 \
+    --hash=sha256:e4e81e09c1578b8df602e3db08b0b3ea0a6947ad612f52bf8dc5ea8d47691f0c
+colorama==0.4.6 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+colorlog==6.12.0 \
+    --hash=sha256:30d392604e9110045a2c2aeefc27d7a017abbab63f3a8aee594eac0801df784e
+flatbuffers==25.12.19 \
+    --hash=sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4
+idna==3.20 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+lxml==6.1.3 \
+    --hash=sha256:66299564c046bc7e0cc5de5106601eae907e9fa5904cd68a323380a8502f7861
+numpy==2.5.4 \
+    --hash=sha256:2ca144f15135b6212a5c47b1e2aeca6e412f102f95a2d5d88d8aec77eb255de3
+omegaconf==2.4.0 \
+    --hash=sha256:f141a664c777582405e3cc6e0545ecc79429e79f844995b1a6e71c35946a025c
+onnxruntime==1.24.4 \
+    --hash=sha256:311e309f573bf3c12aa5723e23823077f83d5e412a18499d4485c7eb41040858
+opencv-python-headless==5.0.0.93 \
+    --hash=sha256:829717b6a95554f273e49e357cee3b3a2a26b6f4842fbc1bed2b45bdd8f87e0e
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pillow==12.3.0 \
+    --hash=sha256:fdafc9cce40277e0f7a0feabce0ee50dd2fa1800f3b38015e51296b5e814048d
+protobuf==7.36.2 \
+    --hash=sha256:a300819d441e078a5608c0d3c709796bb548136058fda017ae51d425b44fd353
+pyclipper==1.4.0 \
+    --hash=sha256:6c317e182590c88ec0194149995e3d71a979cfef3b246383f4e035f9d4a11826
+pymupdf==1.28.0 \
+    --hash=sha256:e01e90fd86abfeb37ceb921eddb951f988a11d45ff6ce6b7664f2039849068ec
+python-docx==1.2.0 \
+    --hash=sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7
+pyyaml==6.0.3 \
+    --hash=sha256:4a2e8cebe2ff6ab7d1050ecd59c25d4c8bd7e6f400f5f82b96557ac0abafd0ac
+rapidocr==3.9.2 \
+    --hash=sha256:04d6b8d151f823d930bd91910555f57bea897c0c44fa6794267b94cf9c1ef9a0
+requests==2.34.2 \
+    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+shapely==2.2.0 \
+    --hash=sha256:48dd1d961391f314ab7fa8812c86ca2a727bee2bdca1478730eacaea007da18e
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+tqdm==4.70.1 \
+    --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+urllib3==2.8.0 \
+    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
