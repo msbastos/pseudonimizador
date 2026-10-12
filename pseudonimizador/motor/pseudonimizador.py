@@ -3800,7 +3800,11 @@ def _spans_de_pj(texto: str, mapa: dict, tomados: list[tuple[int, int]] = (),
     return spans
 
 
-def _pseudonimizar(texto: str, mapa: dict, texto_dos_nomes: str | None = None, conversa: bool = False) -> str:
+def _spans_finais(texto: str, mapa: dict, texto_dos_nomes: str | None = None,
+                  conversa: bool = False) -> list[tuple[int, int, str]]:
+    """Os trechos que _pseudonimizar troca, já ordenados e sem sobreposição
+    (Pseudonimizador, 11/10/2026: separado da montagem para que a troca no
+    lugar — DOCX, PDF — use as mesmas posições)."""
     urls = _urls(texto)
     spans_nomes = (_spans_de_nomes(texto_dos_nomes, mapa, original=texto, urls=urls)
                    if texto_dos_nomes is not None else _spans_de_nomes(texto, mapa, urls=urls))
@@ -3817,18 +3821,25 @@ def _pseudonimizar(texto: str, mapa: dict, texto_dos_nomes: str | None = None, c
     spans_ident = _spans_de_identificadores(texto, mapa, conversa)
     tomados_por_nome = [(ini, fim) for ini, fim, _ in spans_nomes + spans_url + spans_pj]
     spans_ident = [s for s in spans_ident
-                  if _livre(s[0], s[1], tomados_por_nome)]
+                   if _livre(s[0], s[1], tomados_por_nome)]
     spans = spans_nomes + spans_url + spans_pj + spans_ident
     spans.sort(key=lambda s: s[0])
-    partes: list[str] = []
-    pos = 0
+    finais: list[tuple[int, int, str]] = []
     fim_do_ultimo = -1
     for ini, fim, tok in spans:
         if ini < fim_do_ultimo:
             continue  # sobreposicao residual: fica o que comeca antes
+        finais.append((ini, fim, tok))
+        fim_do_ultimo = fim
+    return finais
+
+
+def _pseudonimizar(texto: str, mapa: dict, texto_dos_nomes: str | None = None, conversa: bool = False) -> str:
+    partes: list[str] = []
+    pos = 0
+    for ini, fim, tok in _spans_finais(texto, mapa, texto_dos_nomes, conversa):
         partes.append(texto[pos:ini])
         partes.append(tok)
         pos = fim
-        fim_do_ultimo = fim
     partes.append(texto[pos:])
     return "".join(partes)
