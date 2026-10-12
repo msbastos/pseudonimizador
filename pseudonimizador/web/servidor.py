@@ -111,6 +111,7 @@ class Aplicacao:
         self.segredo = secrets.token_urlsafe(32)        # 256 bits: só outro processo local o lê (instancia.json)
         self._tokens: list[str] = []
         self._trava = threading.Lock()
+        self.trava_config = threading.Lock()      # gravar + aplicar a configuração, um POST por vez
         self.porta = 0
         self.servidor = None
         self.inatividade_s = inatividade_s
@@ -422,8 +423,12 @@ class Manipulador(BaseHTTPRequestHandler):
                 preparar_pastas(nova)
             except (OSError, ValueError) as e:
                 raise ErroDaApi(400, "config", f"não foi possível criar as pastas: {getattr(e, 'strerror', None) or e}") from None
-            gravar(self.app.pasta_estado, nova)
-            self.app.aplicar_config(nova)
+            with self.app.trava_config:
+                try:
+                    gravar(self.app.pasta_estado, nova)
+                except OSError:
+                    raise ErroDaApi(409, "config", "não foi possível gravar as configurações") from None
+                self.app.aplicar_config(nova)
             self.app.log.info("configuração gravada (%s, %s, %s)", nova.formato, nova.tipo, nova.modo)
             self._json(200, self._config_publica())
             return True

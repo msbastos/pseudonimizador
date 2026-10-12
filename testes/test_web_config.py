@@ -27,7 +27,10 @@ def test_config_ler_gravar_validar_e_usar():
         assert s.post("/api/config", {**nova, "pasta_base": "Base3"})[0] == 400
         assert s.post("/api/config", {**nova, "modo": "talvez"})[0] == 400
         assert s.post("/api/config", b"x")[0] == 400
-        # caminho com nome reservado/caractere inválido: 400, nunca 500
+        # saída dentro da Entrada: 400 com a frase da regra
+        status, e = s.post("/api/config", {**nova, "pasta_saida": str(s.pasta / "Base2" / "Entrada" / "Fora")})
+        assert status == 400 and e["erro"] == "config" and "Entrada" in e["mensagem"]
+        # caractere inválido (byte nulo): 400, nunca 500
         assert s.post("/api/config", {**nova, "pasta_saida": "C:/x/a\0b"})[0] == 400
         # o gerar com corpo vazio passa a usar os padrões e as pastas novas
         status, r = s.enviar_arquivo(F.contrato_docx(s.pasta / "contrato.docx"))
@@ -38,6 +41,23 @@ def test_config_ler_gravar_validar_e_usar():
         assert d["resultado"]["saida_nome"] == "contrato - anonimizado.pdf" and d["resultado"]["mapa_nome"] is None
         assert (s.pasta / "Base2" / "Saida" / "contrato - anonimizado.pdf").is_file()
     assert s.pasta.name not in s.log_texto()       # o caminho não vai ao log
+
+
+def test_config_falha_ao_gravar_responde_409_e_nada_aplica():
+    from pseudonimizador.web import servidor
+    with ServidorDeTeste("web_config_gravar") as s:
+        original = servidor.gravar
+
+        def nega(*a, **k):
+            raise PermissionError("negado")
+        servidor.gravar = nega
+        try:
+            status, e = s.post("/api/config", {"pasta_base": str(s.pasta / "Base2")})
+        finally:
+            servidor.gravar = original
+        assert status == 409 and e["erro"] == "config" and "não foi possível gravar as configurações" in e["mensagem"]
+        assert s.get("/api/config")[1]["pasta_base"] == str(s.pasta / "Base")
+        assert not (s.pasta / "estado" / "config.json").exists()
 
 
 if __name__ == "__main__":

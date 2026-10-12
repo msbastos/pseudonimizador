@@ -77,7 +77,7 @@ def test_validar_converte_erro_de_resolve_em_caminho_invalido():
     original = Path.resolve
 
     def estoura(self, *a, **k):
-        raise OSError(22, "nome reservado")
+        raise OSError(22, "argumento inválido")
     Path.resolve = estoura
     try:
         validar({"pasta_base": base})
