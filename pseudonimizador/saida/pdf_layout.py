@@ -8,7 +8,7 @@ from __future__ import annotations
 import bisect
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -227,7 +227,8 @@ FOLGA_RECORTE = 2   # pontos em volta da caixa da linha do OCR na conferência
 def _ocorrencias(palavra: str, texto: str) -> int:
     """Quantas vezes a palavra (normalizada) aparece no texto normalizado: como
     palavra inteira; as de 4 letras ou mais também grudadas em outra (o OCR às
-    vezes junta palavras que a redação aproximou)."""
+    vezes junta palavras que a redação aproximou). Limite: a de 2 ou 3 letras
+    grudada no vizinho sem pontuação ("nomesa") não é contada."""
     if len(palavra) >= 4:
         return texto.count(palavra)
     return len(re.findall(rf"(?<!\w){re.escape(palavra)}(?!\w)", texto))
@@ -260,20 +261,35 @@ def _uma_palavra_a_mais(caixa: fitz.Rect, tinta: list[tuple[float, float]],
 
 
 def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: list[_Item],
-                         todas: list[_Item]) -> bool:
+                         todas: list[_Item]) -> str | None:
     """Confere com o próprio OCR, antes de aplicar a redação, se alguma palavra
     (de 2 letras ou mais) dos trechos desta linha do OCR continua legível.
 
     O recorte da linha (caixa do OCR com folga) é lido com todas as redações
     planejadas da página pintadas de branco. Uma palavra do trecho conta como
     legível quando aparece no recorte mais vezes do que no resto da linha
-    (fora dos trechos), para não confundir o rótulo vizinho com o nome.
+    (fora dos trechos) ou, se também aparece no resto, quando aparece ao menos
+    uma vez (não dá para saber se a lida é a do resto ou a do trecho).
     Enquanto houver palavra legível, a caixa do trecho culpado cresce uma
     palavra de tinta inteira para o lado em que ela falta (a primeira palavra
     do trecho legível: à esquerda; a última: à direita; outra: dos dois lados),
     até VOLTAS vezes; se ainda sobrar (ou não houver mais tinta para tomar), a
-    caixa vira a linha inteira do OCR. Altera `redacao` dos itens; devolve True
-    se a linha inteira foi usada."""
+    caixa vira a linha inteira do OCR.
+
+    Leitura não confiável também leva à linha inteira (para todos os trechos
+    da linha): recorte lido vazio havendo texto que devia continuar à vista;
+    menos da metade das palavras (de 3 letras ou mais) do resto lidas; ou uma
+    palavra do trecho que também está no resto lida menos vezes do que no
+    resto. Linha só com os trechos e recorte vazio é o esperado: a caixa vira
+    a linha inteira sem aviso (nada mais se perde).
+
+    Limites conhecidos: parte de 2 ou 3 letras grudada no vizinho sem
+    pontuação ("NomeSá") não é achada (as de 4 ou mais são, por trecho da
+    palavra); e a conferência confia na leitura do RapidOCR (resto de tinta
+    que ele lê como outras letras passa).
+
+    Altera `redacao` dos itens; devolve o motivo do aviso quando a linha
+    inteira foi usada, ou None."""
     recorte = (linha + (-FOLGA_RECORTE, -FOLGA_RECORTE, FOLGA_RECORTE, FOLGA_RECORTE)) & pagina.rect
     a = da_linha[0].linha[0]
     # o resto da linha: o texto do OCR com os trechos em branco
@@ -282,22 +298,46 @@ def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: l
         for k in range(item.trecho[0] - a, item.trecho[1] - a):
             resto[k] = " "
     resto = normalizar("".join(resto))
+    resto_palavras = re.findall(r"\w+", resto)
+    resto_longas = [p for p in resto_palavras if len(p) >= 3]
     palavras = {id(item): re.findall(r"\w+", normalizar(texto_linha[item.trecho[0] - a:item.trecho[1] - a]))
                 for item in da_linha}
     tinta = _palavras_na_imagem(pagina, linha)
+    motivo = "o trecho continuava legível"
+    culpados: list[_Item] = []
     for volta in range(VOLTAS + 1):
         lido = _ler_recorte(pagina, recorte, [i.redacao for i in todas if i.redacao.intersects(recorte)])
-        culpados: dict[int, tuple[_Item, set[int]]] = {}
+        if not re.search(r"\w", lido):
+            if resto_palavras:
+                motivo, culpados = "leitura de conferência vazia", da_linha
+                break
+            # só os trechos na linha e nada lido: o esperado
+            for item in da_linha:
+                item.redacao = item.redacao | recorte
+            return None
+        lidas_do_resto = sum(min(_ocorrencias(p, lido), n) for p, n in Counter(resto_longas).items())
+        compartilhadas = {p for ps in palavras.values() for p in ps if len(p) >= 2 and _ocorrencias(p, resto)}
+        if 2 * lidas_do_resto < len(resto_longas) or any(
+                _ocorrencias(p, lido) < _ocorrencias(p, resto) for p in compartilhadas):
+            motivo, culpados = "leitura de conferência não confiável", da_linha
+            break
+        por_item: list[tuple[_Item, set[int]]] = []
         for item in da_linha:
-            lidas = {k for k, p in enumerate(palavras[id(item)])
-                     if len(p) >= 2 and _ocorrencias(p, lido) > _ocorrencias(p, resto)}
+            lidas = set()
+            for k, p in enumerate(palavras[id(item)]):
+                if len(p) < 2:
+                    continue
+                no_lido, no_resto = _ocorrencias(p, lido), _ocorrencias(p, resto)
+                if no_lido > no_resto or (no_resto and no_lido):
+                    lidas.add(k)
             if lidas:
-                culpados[id(item)] = (item, lidas)
-        if not culpados:
-            return False
+                por_item.append((item, lidas))
+        if not por_item:
+            return None
+        culpados = [item for item, _ in por_item]
         mudou = False
         if volta < VOLTAS:
-            for item, lidas in culpados.values():
+            for item, lidas in por_item:
                 ultima = len(palavras[id(item)]) - 1
                 esquerda = 0 in lidas or ultima not in lidas
                 direita = ultima in lidas or 0 not in lidas
@@ -308,10 +348,10 @@ def _verificar_e_crescer(pagina, texto_linha: str, linha: fitz.Rect, da_linha: l
                 item.redacao = nova
         if not mudou:
             break
-    # ainda legível: a linha inteira do OCR
-    for item, _ in culpados.values():
+    # ainda legível, ou leitura não confiável: a linha inteira do OCR
+    for item in culpados:
         item.redacao = item.redacao | recorte
-    return True
+    return motivo
 
 
 def _escrever(pagina, area: fitz.Rect, token: str, n: int) -> str | None:
@@ -370,8 +410,8 @@ def gerar_pdf_layout(documento, trocas, destino: Path) -> list[str]:
                 if pagina.rotation:
                     for item in da_linha:
                         item.redacao |= caixa + (-FOLGA_RECORTE, -FOLGA_RECORTE, FOLGA_RECORTE, FOLGA_RECORTE)
-                elif _verificar_e_crescer(pagina, documento.texto[a:b], caixa, da_linha, itens):
-                    avisos.append(f"página {n + 1}: linha inteira do OCR apagada (o trecho continuava legível)")
+                elif motivo := _verificar_e_crescer(pagina, documento.texto[a:b], caixa, da_linha, itens):
+                    avisos.append(f"página {n + 1}: linha inteira do OCR apagada ({motivo})")
         for itens in por_pagina.values():
             # o mesmo nome no texto nativo e no OCR (PDF pesquisável): um só tóken,
             # o da cópia nativa; a cópia do OCR é apagada sem escrever por cima

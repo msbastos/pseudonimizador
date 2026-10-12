@@ -343,6 +343,73 @@ def test_ocr_marca_nao_lida_depois_do_nome_nao_deixa_nome_a_vista():
                     assert parte not in lidas, (nome, marca, largura, parte, lidas)
 
 
+def _espiar_verificacao(capturas):
+    """Troca pdf_layout._verificar_e_crescer por uma versão que guarda (caixa
+    da linha, redações finais dos itens). Devolve a original, para restaurar."""
+    original = pdf_layout._verificar_e_crescer
+
+    def espia(pagina, texto_linha, linha, da_linha, todas):
+        r = original(pagina, texto_linha, linha, da_linha, todas)
+        capturas.append((fitz.Rect(linha), [fitz.Rect(i.redacao) for i in da_linha]))
+        return r
+    pdf_layout._verificar_e_crescer = espia
+    return original
+
+
+def test_ocr_leitura_vazia_da_conferencia_apaga_a_linha_inteira():
+    # O recorte lido vazio (falha do OCR) não prova que o nome sumiu: a linha
+    # inteira do OCR é apagada, com aviso.
+    pasta = F.pasta_temporaria("saida_pdf_leitura_vazia")
+    documento, troca = _documento_com_marca(pasta, ["Ana", "Lima"], "barra", 80)
+    capturas: list = []
+    chamadas = []
+    ocr_original = pdf_layout.ocr_pixmap
+    pdf_layout.ocr_pixmap = lambda pix: chamadas.append(1) or ([] if len(chamadas) == 1 else ocr_original(pix))
+    original = _espiar_verificacao(capturas)
+    try:
+        avisos = gerar_pdf_layout(documento, [troca], pasta / "vazia - pseudonimizado.pdf")
+    finally:
+        pdf_layout.ocr_pixmap = ocr_original
+        pdf_layout._verificar_e_crescer = original
+    assert any("linha inteira" in a for a in avisos), avisos
+    (linha, redacoes), = capturas
+    assert redacoes[0].contains(linha), (linha, redacoes)
+
+
+def test_ocr_palavra_repetida_na_linha_nao_mascara_o_nome():
+    # "Lima" da pessoa e "Lima" da empresa na mesma linha: ler "lima" no recorte
+    # não pode ser atribuído só à empresa. Resultado fail-closed: a caixa cresce
+    # até a linha inteira e o "Lima" da pessoa sai.
+    pasta = F.pasta_temporaria("saida_pdf_palavra_repetida")
+    fonte = fitz.open()
+    pagina = fonte.new_page(width=595, height=842)
+    linha_txt = "Ana Lima, CPF 111.444.777-35, sócia de Lima Engenharia"
+    pagina.insert_text((60, 100), linha_txt, fontsize=12, fontname="tiro")
+    lima_pessoa = pagina.search_for("Lima,")[0]
+    r = pagina.search_for(linha_txt)[0]
+    pix = pagina.get_pixmap(dpi=200)
+    doc = fitz.open()
+    nova = doc.new_page(width=595, height=842)
+    nova.insert_image(nova.rect, pixmap=pix)
+    caminho = pasta / "repetida.pdf"
+    doc.save(str(caminho))
+    centro = (r.y0 + r.y1) / 2
+    caixa = fitz.Rect(r.x0 - 2, centro - 8.5, r.x1 + 2, centro + 8.5)
+    w = caixa.width / len(linha_txt)
+    origens = [OrigemPdf(0, (caixa.x0 + w * k, caixa.y0, caixa.x0 + w * (k + 1), caixa.y1), True)
+               for k in range(len(linha_txt))] + [None]
+    documento = Documento(caminho=caminho, tipo="pdf_ocr", texto=linha_txt + chr(10), origens=origens, paginas_ocr=[0])
+    capturas: list = []
+    original = _espiar_verificacao(capturas)
+    try:
+        avisos = gerar_pdf_layout(documento, [Troca(0, len("Ana Lima"), "[[PESSOA_1]]")], pasta / "rep - pseudonimizado.pdf")
+    finally:
+        pdf_layout._verificar_e_crescer = original
+    (linha, redacoes), = capturas
+    assert redacoes[0].x0 <= lima_pessoa.x0 and redacoes[0].x1 >= lima_pessoa.x1 - 3, (redacoes, lima_pessoa)
+    assert any("linha inteira" in a for a in avisos), avisos
+
+
 def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():
     # Escaneado com camada de texto invisível: a redação do texto nativo tem de
     # apagar também os pixels da caixa inteira (não só uma faixa estreitada).
