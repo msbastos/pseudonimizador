@@ -6,6 +6,7 @@ lugar, com a fonte reduzida até caber (spec §7 e §14)."""
 from __future__ import annotations
 
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -69,7 +70,7 @@ def _palavras_na_imagem(pagina, linha: fitz.Rect) -> list[tuple[float, float]]:
     return [(recorte.x0 + a * escala, recorte.x0 + (b + 1) * escala) for a, b in palavras]
 
 
-def _estimar_ocr(documento, grupo: _Grupo) -> fitz.Rect:
+def _estimar_ocr(documento, grupo: _Grupo, pagina=None) -> fitz.Rect:
     """Caixa estimada do trecho numa linha do OCR. O leitor divide a linha em
     partes iguais por caractere; aqui a divisão é proporcional à largura dos
     caracteres (métrica da Helvetica), que erra bem menos em fonte comum."""
@@ -86,7 +87,29 @@ def _estimar_ocr(documento, grupo: _Grupo) -> fitz.Rect:
     antes = sum(larguras[:grupo.ini - a])
     dentro = sum(larguras[grupo.ini - a:grupo.fim - a])
     esc = linha.width / total
-    return fitz.Rect(linha.x0 + antes * esc, linha.y0, linha.x0 + (antes + dentro) * esc, linha.y1)
+    caixa = fitz.Rect(linha.x0 + antes * esc, linha.y0, linha.x0 + (antes + dentro) * esc, linha.y1)
+    if pagina is None or pagina.rotation:
+        return caixa
+    # Só crescem (deixar dado à vista custa mais que apagar o vizinho):
+    ink = [(x, y) for x, y in _palavras_na_imagem(pagina, fitz.Rect(pagina.rect.x0, linha.y0, pagina.rect.x1, linha.y1))
+           if x < linha.x1 + 2 and y > linha.x0 - 2]
+    if not ink:
+        return caixa
+    # (b) largura que o texto lido não explica (vão, carimbo, marca não lida):
+    # a estimativa se alarga dos dois lados por ela
+    natural = total * linha.height / 1.25
+    sobra = max(0.0, (ink[-1][1] - ink[0][0]) - natural)
+    caixa.x0 -= sobra
+    caixa.x1 += sobra
+    # (a) com o mesmo número de palavras no texto e na imagem, as palavras da
+    # imagem de mesmo índice que as do trecho entram na área
+    palavras = [m.span() for m in re.finditer(r"\S+", texto[a:b])]
+    if len(palavras) == len(ink):
+        for k, (x, y) in enumerate(palavras):
+            if x + a < grupo.fim and y + a > grupo.ini:
+                caixa.x0 = min(caixa.x0, ink[k][0])
+                caixa.x1 = max(caixa.x1, ink[k][1])
+    return caixa
 
 
 def _caixa_ocr(pagina, caixa: fitz.Rect) -> tuple[float, float]:
@@ -164,7 +187,7 @@ def gerar_pdf_layout(documento, trocas, destino: Path) -> list[str]:
                     # dentro da redação, então ela cobre a caixa inteira
                     cheio = n in documento.paginas_ocr or any(
                         fitz.Rect(i["bbox"]).intersects(caixa) for i in pagina.get_image_info())
-                redacao, area = _retangulos(pagina, grupo, cheio, _estimar_ocr(documento, grupo) if grupo[0].ocr else None)
+                redacao, area = _retangulos(pagina, grupo, cheio, _estimar_ocr(documento, grupo, pagina) if grupo[0].ocr else None)
                 por_pagina[n].append([redacao, area, t.token if k == 0 else "", grupo[0].ocr])
         for itens in por_pagina.values():
             # o mesmo nome no texto nativo e no OCR (PDF pesquisável): um só tóken,

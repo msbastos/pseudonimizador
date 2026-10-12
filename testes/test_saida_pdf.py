@@ -57,7 +57,7 @@ def test_escaneado_pixels_apagados():
     destino, _ = _gerar(F.contrato_escaneado(pasta / "e.pdf"), "e - pseudonimizado.pdf")
     with fitz.open(str(destino)) as pdf:
         lidas = _palavras(pdf)
-    for parte in ("maria", "aparecida", "pereira", "111", "444", "777"):
+    for parte in ("maria", "aparecida", "pereira", "111", "444", "777", "35"):
         assert parte not in lidas, (parte, lidas)
     assert "locador" in lidas, lidas
 
@@ -102,10 +102,63 @@ def test_ocr_estimativa_errada_nao_deixa_nome_a_vista():
     with fitz.open(str(caminho)) as pdf:
         grupos = pdf_layout._linhas(documento, ini_t, fim_t)
         assert len(grupos) == 1
-        redacao, _ = pdf_layout._retangulos(pdf[0], grupos[0], False, pdf_layout._estimar_ocr(documento, grupos[0]))
+        redacao, _ = pdf_layout._retangulos(pdf[0], grupos[0], False, pdf_layout._estimar_ocr(documento, grupos[0], pdf[0]))
     assert redacao.x0 <= ap.x0 + 0.3 and redacao.x1 >= pe.x1 - 0.3, (redacao, ap, pe)
     avisos = gerar_pdf_layout(documento, [Troca(ini_t, fim_t, "[[PESSOA_1]]")], pasta / "saida.pdf")
     assert isinstance(avisos, list)
+
+
+def test_ocr_vao_na_linha_nao_deixa_nome_a_vista():
+    # Uma só caixa de OCR cobre "Nome:" (x=60) e, bem adiante (x=260), o resto da
+    # linha: a estimativa proporcional cai longe do nome. A área tem de crescer
+    # até cobrir toda a tinta de Maria, Aparecida e Pereira,.
+    pasta = F.pasta_temporaria("saida_pdf_ocr_vao")
+
+    def escrever(pagina):
+        pagina.insert_text((60, 100), "Nome:", fontsize=14, fontname="helv")
+        pagina.insert_text((260, 100), "Maria Aparecida Pereira, CPF 111.444.777-35", fontsize=14, fontname="helv")
+
+    fonte, doc, nova, _ = _imagem_da_pagina(None, None, escrever)
+    alvo = [fonte[0].search_for(p)[0] for p in ("Maria", "Aparecida", "Pereira,")]
+    ini = fonte[0].search_for("Nome:")[0]
+    fim = fonte[0].search_for("111.444.777-35")[0]
+    caixa = fitz.Rect(ini.x0, ini.y0, fim.x1, ini.y1)
+    caminho = pasta / "vao.pdf"
+    doc.save(str(caminho))
+    texto = "Nome: Maria Aparecida Pereira, CPF 111.444.777-35"
+    largura = caixa.width / len(texto)
+    origens = [OrigemPdf(0, (caixa.x0 + largura * k, caixa.y0, caixa.x0 + largura * (k + 1), caixa.y1), True)
+               for k in range(len(texto))]
+    documento = Documento(caminho=caminho, tipo="pdf_ocr", texto=texto, origens=origens, paginas_ocr=[0])
+    ini_t = texto.index("Maria")
+    fim_t = texto.index("Pereira,") + len("Pereira")
+    with fitz.open(str(caminho)) as pdf:
+        grupos = pdf_layout._linhas(documento, ini_t, fim_t)
+        redacao, _ = pdf_layout._retangulos(pdf[0], grupos[0], False, pdf_layout._estimar_ocr(documento, grupos[0], pdf[0]))
+    for r in alvo:
+        assert redacao.x0 <= r.x0 + 0.3 and redacao.x1 >= r.x1 - 0.3, (redacao, r)
+
+
+def test_token_duplicado_nativo_e_ocr_sai_uma_vez():
+    pasta = F.pasta_temporaria("saida_pdf_duplicado")
+    doc = fitz.open()
+    pagina = doc.new_page(width=595, height=842)
+    pagina.insert_text((60, 100), F.PESSOA_1, fontsize=14, fontname="helv")
+    r = pagina.search_for(F.PESSOA_1)[0]
+    caminho = pasta / "dup.pdf"
+    doc.save(str(caminho))
+    n = len(F.PESSOA_1)
+    w = r.width / n
+    caixas = [(r.x0 + w * k, r.y0, r.x0 + w * (k + 1), r.y1) for k in range(n)]
+    origens = ([OrigemPdf(0, c, False) for c in caixas] + [None]
+               + [OrigemPdf(0, c, True) for c in caixas] + [None])
+    texto = F.PESSOA_1 + chr(10) + F.PESSOA_1 + chr(10)
+    documento = Documento(caminho=caminho, tipo="pdf_misto", texto=texto, origens=origens, paginas_ocr=[0])
+    trocas = [Troca(0, n, "[[PESSOA_1]]"), Troca(n + 1, 2 * n + 1, "[[PESSOA_1]]")]
+    destino = pasta / "dup - pseudonimizado.pdf"
+    gerar_pdf_layout(documento, trocas, destino)
+    texto_saida, _ = _texto(destino)
+    assert texto_saida.count("[[PESSOA_1]]") == 1, texto_saida
 
 
 def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():
@@ -130,7 +183,7 @@ def test_pdf_pesquisavel_apaga_pixels_sob_o_texto():
     gerar_pdf_layout(documento, res.trocas, destino)
     with fitz.open(str(destino)) as pdf:
         lidas = _palavras(pdf)
-    for parte in ("maria", "aparecida", "pereira", "111", "444", "777"):
+    for parte in ("maria", "aparecida", "pereira", "111", "444", "777", "35"):
         assert parte not in lidas, (parte, lidas)
 
 
