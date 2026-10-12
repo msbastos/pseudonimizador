@@ -64,7 +64,8 @@ def test_nota_de_rodape_bloqueia():
                    f'wordprocessingml/2006/main"><w:footnote w:id="1"><w:p><w:r><w:t>{F.PESSOA_1}</w:t>'
                    '</w:r></w:p></w:footnote></w:footnotes>')
     doc2 = ler(com_nota)
-    assert any("notas de rodapé" in a for a in doc2.avisos)
+    assert ("o documento tem notas de rodapé ou de fim, que não são lidas nem tratadas; "
+            "confira-as antes de compartilhar a saída") in doc2.avisos
     try:
         gerar(doc2, Revisao(doc2).fechar(), formato="layout", modo="reversivel",
               pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
@@ -159,6 +160,69 @@ def test_nome_da_saida_troca_valores_do_mapa_por_token():
     g = gerar(doc, res, formato="layout", modo="definitivo", pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
     token = next(t.strip("[]") for t, i in res.mapa["tokens"].items() if i["valor"] == F.PESSOA_1)
     assert g.saida.name == f"Contrato {token} - anonimizado.docx", g.saida.name
+
+
+def test_nome_da_saida_sem_partes_do_nome_com_qualquer_separador():
+    pasta = F.pasta_temporaria("gerar_nome_separadores")
+    for stem in ("Maria_Aparecida_Pereira", "Maria-Aparecida-Pereira", "Maria.Aparecida.Pereira",
+                 "Contrato Pereira", "Contrato_maria"):
+        doc = ler(F.contrato_docx(pasta / f"{stem}.docx"))
+        g = gerar(doc, Revisao(doc).fechar(), formato="layout", modo="definitivo",
+                  pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+        nome = g.saida.name.lower()
+        assert not any(p in nome for p in ("maria", "aparecida", "pereira")), (stem, g.saida.name)
+
+
+def test_nome_da_saida_nao_corrompe_palavra_que_contem_parte_de_nome():
+    from pseudonimizador.saida import _base_anonima
+    mapa = {"tokens": {"[[PESSOA_1]]": {"categoria": "pessoa", "valor": "Ana Lima"},
+                       "[[CPF_1]]": {"categoria": "cpf", "valor": F.CPF}}}
+    assert _base_anonima("Contrato Banana", mapa) == "Contrato Banana"
+    assert _base_anonima("Recibo_Ana-Lima", mapa) == "Recibo_PESSOA_1"
+    assert _base_anonima("Lima e Ana", mapa) == "PESSOA_1 e PESSOA_1"
+    assert _base_anonima(f"CPF {F.CPF} final", mapa) == "CPF CPF_1 final"
+    # o tóken inserido não é relido (CPF_1 não vira nada mais)
+    assert _base_anonima("Ana", mapa) == "PESSOA_1"
+
+
+def test_saida_so_aparece_com_o_nome_final_depois_da_conferencia():
+    import pseudonimizador.saida as S
+    pasta, doc, res = _preparar("gerar_conferindo")
+    final = pasta / "S" / "contrato - pseudonimizado.docx"
+    vistos = []
+    original = S.conferir
+
+    def espia(caminho, *a, **k):
+        vistos.append((caminho, caminho.exists(), final.exists()))
+        return original(caminho, *a, **k)
+    S.conferir = espia
+    try:
+        g = gerar(doc, res, formato="layout", modo="reversivel", pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    finally:
+        S.conferir = original
+    (caminho, existia, final_existia), = vistos
+    assert existia and not final_existia and caminho != final, vistos
+    assert g.saida == final and final.exists() and not caminho.exists()
+    assert sorted(p.name for p in (pasta / "S").iterdir()) == [final.name]
+
+
+def test_falha_ao_gravar_o_mapa_apaga_a_saida():
+    import pseudonimizador.saida as S
+    pasta, doc, res = _preparar("gerar_mapa_falha")
+    original = S.mapas.gravar
+
+    def quebrada(*a, **k):
+        raise OSError("disco cheio")
+    S.mapas.gravar = quebrada
+    try:
+        gerar(doc, res, formato="layout", modo="reversivel", pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    except OSError:
+        pass
+    else:
+        raise AssertionError("deveria propagar")
+    finally:
+        S.mapas.gravar = original
+    assert not any((pasta / "S").iterdir())
 
 
 if __name__ == "__main__":

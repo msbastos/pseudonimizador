@@ -10,13 +10,13 @@ from pathlib import Path
 import fitz
 
 
-def gerar_docx_texto(texto: str, destino: Path) -> None:
+def gerar_docx_texto(texto: str, destino: Path, identificador: str = "") -> None:
     import docx
     from .docx_layout import limpar_metadados_docx
     d = docx.Document()
     for linha in texto.split("\n"):
         d.add_paragraph(linha)
-    limpar_metadados_docx(d)
+    limpar_metadados_docx(d, identificador)
     tmp = Path(destino).with_suffix(".docx.tmp")
     try:
         d.save(str(tmp))

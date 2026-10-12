@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Termo adicional (AGPL-3.0, seção 7(b)): preservar os avisos de autoria; ver CREDITOS.md.
 """Toda combinação entrada × formato × tipo × modo: nada em claro; no
-reversível com saída DOCX, restaurar devolve o original."""
+reversível com saída DOCX (layout ou só texto), a saída leva o identificador do
+mapa e restaurar devolve os dados; do DOCX no layout, o original inteiro."""
 import _base  # noqa: F401
+import json
+
+import docx
 import fabrica as F
 from pseudonimizador.leitura import ler
 from pseudonimizador.restaurar import mapa_do_docx, restaurar_docx
@@ -39,11 +43,18 @@ def test_matriz_completa():
                         falhas.append(f"{rotulo}: '{dado}' em claro na saída")
                 if (modo == "reversivel") != (g.mapa is not None):
                     falhas.append(f"{rotulo}: mapa inesperado")
-                if modo == "reversivel" and g.saida.suffix == ".docx" and nome == "docx" and formato == "layout":
+                if modo == "reversivel" and g.saida.suffix == ".docx":
+                    ident = docx.Document(str(g.saida)).core_properties.identifier
+                    if ident != "pseudonimizador:" + json.loads(g.mapa.read_text(encoding="utf-8"))["id"]:
+                        falhas.append(f"{rotulo}: identificador do mapa ausente na saída ({ident!r})")
+                        continue
                     restaurado = g.saida.with_name(g.saida.stem + " restaurado.docx")
                     restaurar_docx(g.saida, restaurado, mapa_do_docx(g.saida, pasta / "Mapas"))
-                    if ler(restaurado).texto != doc.texto:
+                    texto_restaurado = ler(restaurado).texto
+                    if nome == "docx" and formato == "layout" and texto_restaurado != doc.texto:
                         falhas.append(f"{rotulo}: restauração diferente do original")
+                    if nome != "escaneado" and not all(d in texto_restaurado for d in (F.PESSOA_1, F.CPF)):
+                        falhas.append(f"{rotulo}: restauração sem os dados originais")
     assert not falhas, "\n".join(falhas)
 
 

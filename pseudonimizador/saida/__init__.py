@@ -4,8 +4,8 @@
 PDF) e modo (reversível ou definitivo), com conferência ao final."""
 from __future__ import annotations
 
+import os
 import re
-import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,17 +24,55 @@ class Gerado:
     avisos: list[str] = field(default_factory=list)
 
 
+_PALAVRA = re.compile(r"[^\W_]+")
+_CONECTIVOS = {"da", "de", "do", "das", "dos", "e"}
+
+
+def _palavras(texto: str) -> list[str]:
+    return [normalizar(m.group()) for m in _PALAVRA.finditer(texto)]
+
+
 def _base_anonima(stem: str, mapa: dict) -> str:
-    """Nome do arquivo de entrada sem os valores do mapa: cada um vira o seu
-    tóken sem colchetes (mais longos primeiro, sem caixa nem acento)."""
-    pares = sorted(((normalizar(i.get("valor") or ""), tok.strip("[]"))
-                    for tok, i in mapa.get("tokens", {}).items() if len(normalizar(i.get("valor") or "")) >= 2),
-                   key=lambda p: -len(p[0]))
-    # normalizar remove acentos combinando; o stem é comparado letra a letra sem acento
-    plano = "".join(c for c in unicodedata.normalize("NFD", stem) if not unicodedata.combining(c))
-    for valor, rotulo in pares:
-        plano = re.sub(re.escape(valor).replace(r"\ ", r"\s+"), rotulo, plano, flags=re.IGNORECASE)
-    return plano.strip()
+    """Nome do arquivo de entrada sem os valores do mapa. O nome é dividido em
+    palavras (o que fica entre espaço, _, ., - e outros separadores, que são
+    mantidos) comparadas sem caixa nem acento e sempre inteiras: um valor casa
+    como a sua sequência de palavras, com quaisquer separadores entre elas, e
+    vira o seu tóken sem colchetes (sequências mais longas primeiro). Cada
+    palavra solta de nome de pessoa ou de empresa (3 letras ou mais, fora os
+    conectivos) também vira o tóken: "Contrato Pereira" não guarda o
+    sobrenome. Uma só passada pelo nome original: o tóken inserido não é relido."""
+    sequencias: list[tuple[tuple[str, ...], str]] = []
+    soltas: dict[str, str] = {}
+    for tok, info in mapa.get("tokens", {}).items():
+        palavras = tuple(_palavras(str(info.get("valor") or "")))
+        if not palavras:
+            continue
+        rotulo = tok.strip("[]")
+        sequencias.append((palavras, rotulo))
+        if info.get("categoria") in ("pessoa", "pj"):
+            for w in palavras:
+                if len(w) >= 3 and w not in _CONECTIVOS:
+                    soltas.setdefault(w, rotulo)
+    sequencias.sort(key=lambda p: (-len(p[0]), -sum(map(len, p[0]))))
+    achadas = list(_PALAVRA.finditer(stem))
+    chaves = [normalizar(m.group()) for m in achadas]
+    partes: list[str] = []
+    fim_anterior = 0
+    i = 0
+    while i < len(achadas):
+        for palavras, rotulo in sequencias:
+            n = len(palavras)
+            if tuple(chaves[i:i + n]) == palavras:
+                break
+        else:
+            n, rotulo = 1, soltas.get(chaves[i])
+        if rotulo is not None:
+            partes.append(stem[fim_anterior:achadas[i].start()])
+            partes.append(rotulo)
+            fim_anterior = achadas[i + n - 1].end()
+        i += n
+    partes.append(stem[fim_anterior:])
+    return "".join(partes).strip()
 
 
 def _destino(pasta: Path, base: str, sufixo: str) -> Path:
@@ -64,34 +102,44 @@ def gerar(documento, resultado, *, formato: str, modo: str, pasta_saida: Path, p
     identificador = mapas.novo_id(Path(documento.caminho).stem) if modo == "reversivel" else ""
     avisos = list(documento.avisos)
 
-    if formato == "texto":
-        from .texto import gerar_docx_texto, gerar_pdf_texto
-        texto = aplicar_trocas(documento.texto, resultado.trocas)
-        (gerar_docx_texto if tipo == "docx" else gerar_pdf_texto)(texto, destino)
-        paginas_ocr: list[int] = []
-    elif tipo == "docx":
-        from .docx_layout import gerar_docx_layout
-        gerar_docx_layout(documento, resultado.trocas, destino,
-                          identificador=PREFIXO_ID + identificador if identificador else "")
-        paginas_ocr = []
-    else:
-        from .pdf_layout import gerar_pdf_layout
-        avisos += gerar_pdf_layout(documento, resultado.trocas, destino)
-        paginas_ocr = documento.paginas_ocr
-
+    # o arquivo é escrito e conferido com um nome provisório (oculto) na mesma
+    # pasta; só depois de passar na conferência recebe o nome final
+    provisorio = destino.with_name(f".{destino.stem}.conferindo{destino.suffix}")
+    id_completo = PREFIXO_ID + identificador if identificador else ""
     try:
-        vazados = conferir(destino, resultado.mapa, paginas_ocr)
+        if formato == "texto":
+            from .texto import gerar_docx_texto, gerar_pdf_texto
+            texto = aplicar_trocas(documento.texto, resultado.trocas)
+            if tipo == "docx":
+                gerar_docx_texto(texto, provisorio, identificador=id_completo)
+            else:
+                gerar_pdf_texto(texto, provisorio)
+            paginas_ocr: list[int] = []
+        elif tipo == "docx":
+            from .docx_layout import gerar_docx_layout
+            gerar_docx_layout(documento, resultado.trocas, provisorio, identificador=id_completo)
+            paginas_ocr = []
+        else:
+            from .pdf_layout import gerar_pdf_layout
+            avisos += gerar_pdf_layout(documento, resultado.trocas, provisorio)
+            paginas_ocr = documento.paginas_ocr
+        vazados = conferir(provisorio, resultado.mapa, paginas_ocr)
+        if vazados:
+            raise VazamentoDetectado(vazados)
+        os.replace(provisorio, destino)
     except BaseException:
-        destino.unlink(missing_ok=True)
+        provisorio.unlink(missing_ok=True)
         raise
-    if vazados:
-        destino.unlink(missing_ok=True)
-        raise VazamentoDetectado(vazados)
     pulados = valores_vigiados(resultado.mapa, devolver_pulados=True)[1]
     if pulados:
         avisos.append(f"{len(pulados)} valor(es) curto(s) não conferido(s) automaticamente")
 
     caminho_mapa = None
     if modo == "reversivel":
-        _, caminho_mapa = mapas.gravar(pasta_mapas, Path(documento.caminho).stem, resultado.mapa, identificador)
+        try:
+            _, caminho_mapa = mapas.gravar(pasta_mapas, Path(documento.caminho).stem, resultado.mapa, identificador)
+        except BaseException:
+            # saída reversível sem o mapa não se restaura: não fica
+            destino.unlink(missing_ok=True)
+            raise
     return Gerado(destino, caminho_mapa, avisos)
