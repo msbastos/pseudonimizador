@@ -655,6 +655,14 @@ def test_notas_da_release_cobrem_requisitos_smartscreen_hash_e_limites():
         assert exigido in texto, exigido
 
 
+def test_docs_sem_caracteres_de_controle():
+    import re
+    for rel in ("README.md", "CREDITOS.md", "docs/release-notes/v0.2.0.md", "empacotamento/README.md"):
+        dados = (RAIZ / rel).read_bytes()
+        achado = re.search(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", dados)
+        assert achado is None, f"{rel}: byte de controle {achado.group()!r} na posição {achado.start()}"
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

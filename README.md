@@ -88,7 +88,7 @@ Estado, configuração e log ficam em `%LOCALAPPDATA%\Pseudonimizador` (`config.
 ## Montar o instalador
 
 Para o mantenedor: `.venv\Scripts\python -X utf8 empacotamento/construir.py`
-monta `buildpp` (Python 3.14 embarcável, bibliotecas do `requirements.lock`
+monta `build\app` (Python 3.14 embarcável, bibliotecas do `requirements.lock`
 com hashes, CRT do Visual C++ app-local, código pelo manifesto), roda a fumaça
 no Python embarcado e compila `dist\Pseudonimizador-Setup.exe` com o Inno
 Setup 6. Pré-requisitos, aceitação no Windows Sandbox e conferência
