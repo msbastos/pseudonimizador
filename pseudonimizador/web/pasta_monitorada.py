@@ -43,15 +43,33 @@ class Vigia:
         self._vistos: dict[Path, tuple[int, float]] = {}        # última assinatura vista
         self._registrados: dict[Path, tuple[int, float]] = {}   # já virou documento (ou falhou)
         self._a_mover: list[Doc] = []                           # gerados, mas o original estava preso
-        self.trocar(pasta_entrada, pasta_processados)
+        self._avisados: set[str] = set()                        # ids já logados como "preso"
+        self._ultimo_erro: str | None = None                    # tipo da última falha de varredura
+        self.pasta_entrada = Path(pasta_entrada)
+        self.pasta_processados = Path(pasta_processados)
+
+    @staticmethod
+    def _igual(a: Path, b: Path) -> bool:
+        try:
+            return a.resolve() == b.resolve()
+        except OSError:
+            return a == b
 
     def trocar(self, pasta_entrada: Path, pasta_processados: Path) -> None:
+        """Chamado a cada gravação da configuração. Pastas iguais: nada muda.
+        Só a Processados: o que já foi visto/registrado continua valendo.
+        Entrada nova: recomeça a contar o que se viu. A fila de originais
+        presos é sempre mantida: cada item se move para a Processados da
+        pasta em que está o seu original."""
+        pasta_entrada, pasta_processados = Path(pasta_entrada), Path(pasta_processados)
         with self._trava:
-            self.pasta_entrada = Path(pasta_entrada)
-            self.pasta_processados = Path(pasta_processados)
-            self._vistos.clear()
-            self._registrados.clear()
-            self._a_mover.clear()
+            mesma_entrada = self._igual(pasta_entrada, self.pasta_entrada)
+            if mesma_entrada and self._igual(pasta_processados, self.pasta_processados):
+                return
+            self.pasta_entrada, self.pasta_processados = pasta_entrada, pasta_processados
+            if not mesma_entrada:
+                self._vistos.clear()
+                self._registrados.clear()
 
     def iniciar(self) -> None:
         self._parar.clear()
@@ -67,48 +85,57 @@ class Vigia:
         while not self._parar.wait(self.intervalo_s):
             try:
                 self.varrer()
+                self._ultimo_erro = None
             except Exception as e:  # noqa: BLE001 — a vigia nunca morre calada
-                self.log.error("pasta monitorada: falha na varredura (%s)", type(e).__name__)
+                if type(e).__name__ != self._ultimo_erro:          # uma vez por tipo, não a cada 2 s
+                    self._ultimo_erro = type(e).__name__
+                    self.log.error("pasta monitorada: falha na varredura (%s)", self._ultimo_erro)
 
     def varrer(self) -> list[Doc]:
-        """Uma varredura; devolve os documentos registrados nela."""
-        novos: list[Doc] = []
+        """Uma varredura; devolve os documentos registrados nela. A leitura da
+        pasta e os stat ficam fora da trava; ela só compara e atualiza."""
         for doc in self._a_mover_agora():
             self.processado(doc)                     # tenta de novo o que estava preso
         with self._trava:
             pasta = self.pasta_entrada
+        try:
+            candidatos = [c for c in pasta.iterdir()
+                          if c.suffix.lower() in ACEITOS and c.is_file() and not _oculto(c)]
+        except OSError:
+            return []
+        assinaturas: dict[Path, tuple[int, float]] = {}
+        for c in candidatos:
             try:
-                entradas = [c for c in pasta.iterdir() if c.is_file()]
+                st = c.stat()
             except OSError:
-                return novos
-            atuais: set[Path] = set()
-            for c in entradas:
-                if c.suffix.lower() not in ACEITOS or _oculto(c):
-                    continue
-                try:
-                    st = c.stat()
-                except OSError:
-                    continue
-                assinatura = (st.st_size, st.st_mtime)
-                atuais.add(c)
+                continue
+            assinaturas[c] = (st.st_size, st.st_mtime)
+        registrar: list[Path] = []
+        with self._trava:
+            if self.pasta_entrada != pasta:          # trocada durante a leitura: fica para a próxima
+                return []
+            for c, assinatura in assinaturas.items():
                 if self._registrados.get(c) == assinatura:
                     continue
                 if self._vistos.get(c) != assinatura:
                     self._vistos[c] = assinatura           # primeira vez, ou ainda mudando
                     continue
-                if st.st_size == 0:
+                if assinatura[0] == 0:
                     continue
-                try:
-                    doc = self.registro.registrar_arquivo(c, "pasta")
-                except RuntimeError:                 # o programa está encerrando
-                    return novos
                 self._registrados[c] = assinatura
-                novos.append(doc)
-                self.log.info("pasta monitorada: documento %s registrado", doc.id)
+                registrar.append(c)
             for c in list(self._vistos):
-                if c not in atuais:
+                if c not in assinaturas:
                     self._vistos.pop(c, None)
                     self._registrados.pop(c, None)
+        novos: list[Doc] = []
+        for c in registrar:
+            try:
+                doc = self.registro.registrar_arquivo(c, "pasta")
+            except RuntimeError:                     # o programa está encerrando
+                break
+            novos.append(doc)
+            self.log.info("pasta monitorada: documento %s registrado", doc.id)
         return novos
 
     def _a_mover_agora(self) -> list[Doc]:
@@ -119,13 +146,13 @@ class Vigia:
     def processado(self, doc: Doc) -> None:
         """Depois de gerar: o original vai para Processados (colisão → " (2)").
         Documento descartado no meio não move nada; arquivo preso fica para a
-        próxima varredura; arquivo que já não existe é esquecido."""
+        próxima varredura (log só na primeira falha); arquivo que já não
+        existe é esquecido."""
         if doc.origem != "pasta" or doc.descartado:
             return
         with self._trava:
-            processados = self.pasta_processados
-            if doc.caminho.parent != self.pasta_entrada:      # pasta trocada desde então
-                return
+            processados = (self.pasta_processados if doc.caminho.parent == self.pasta_entrada
+                           else doc.caminho.parent / "Processados")
         try:
             if not doc.caminho.exists():
                 self._esquecer(doc)
@@ -136,8 +163,11 @@ class Vigia:
         except OSError as e:
             with self._trava:
                 self._a_mover.append(doc)
-            self.log.warning("pasta monitorada: documento %s não foi movido, nova tentativa (%s)",
-                             doc.id, type(e).__name__)
+                primeira = doc.id not in self._avisados
+                self._avisados.add(doc.id)
+            if primeira:
+                self.log.warning("pasta monitorada: documento %s não foi movido, nova tentativa (%s)",
+                                 doc.id, type(e).__name__)
             return
         self._esquecer(doc)
         self.log.info("pasta monitorada: documento %s movido para Processados", doc.id)
@@ -146,3 +176,4 @@ class Vigia:
         with self._trava:
             self._registrados.pop(doc.caminho, None)
             self._vistos.pop(doc.caminho, None)
+            self._avisados.discard(doc.id)

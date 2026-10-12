@@ -137,6 +137,20 @@ def test_toda_resposta_leva_referrer_policy():
             resp.close()
 
 
+def test_recusa_4xx_com_corpo_pendente_nao_derruba_a_conexao():
+    """Corpo até o limite JSON é lido e descartado antes da recusa (no Windows, fechar com
+    corpo não lido manda RST); acima do limite, não se espera por ele."""
+    with ServidorDeTeste("web_srv_drena") as s:
+        mau = f"exemplo.com.br:{s.porta}"
+        corpo = b"{" + b" " * (1024 * 1024) + b"}"
+        for _ in range(25):
+            assert s.pedir("POST", "/abrir", corpo, {"Content-Type": "application/json"},
+                           token=False, host=mau)[0] == 403
+            assert s.pedir("POST", "/api/documentos", corpo, {"Content-Type": "application/json"},
+                           token="errado")[0] == 403
+            assert s.pedir("PUT", "/api/estado", corpo, {"Content-Type": "application/json"})[0] == 405
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

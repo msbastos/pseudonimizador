@@ -188,7 +188,32 @@ class Manipulador(BaseHTTPRequestHandler):
             self.app.log.info("%s %s -> %s", self.command, urlsplit(self.path).path, numero)
 
     # --- respostas -----------------------------------------------------------
+    _lidos = 0                         # bytes do corpo do pedido já consumidos
+
+    def _descartar_corpo(self) -> None:
+        """Antes de recusar (4xx/5xx): lê e joga fora o corpo ainda não lido, se o
+        anunciado cabe no limite JSON. No Windows, fechar a conexão com corpo
+        pendente manda RST e o cliente perde a resposta. Acima do limite não se
+        espera por corpo nenhum (é a recusa 413)."""
+        try:
+            restante = int(self.headers.get("Content-Length") or 0) - self._lidos
+        except ValueError:
+            return
+        if restante <= 0 or restante + self._lidos > LIMITE_JSON:
+            return
+        try:
+            while restante > 0:
+                bloco = self.rfile.read(min(65536, restante))
+                if not bloco:
+                    break
+                restante -= len(bloco)
+        except OSError:
+            pass
+        self._lidos = int(self.headers.get("Content-Length") or 0) - max(restante, 0)
+
     def _enviar(self, status: int, corpo: bytes, tipo: str) -> None:
+        if status >= 400:
+            self._descartar_corpo()
         self.send_response(status)
         for chave, valor in CABECALHOS.items():
             self.send_header(chave, valor)
@@ -218,7 +243,9 @@ class Manipulador(BaseHTTPRequestHandler):
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):
             raise ErroDaApi(400, "corpo", "só JSON")
         try:
-            dados = json.loads(self.rfile.read(tamanho).decode("utf-8"))
+            bruto = self.rfile.read(tamanho)
+            self._lidos += len(bruto)
+            dados = json.loads(bruto.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             raise ErroDaApi(400, "corpo", "JSON inválido") from None
         if not isinstance(dados, dict):
@@ -238,6 +265,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 if not bloco:
                     raise ErroDaApi(400, "corpo", "o envio foi interrompido")
                 restante -= len(bloco)
+                self._lidos += len(bloco)
                 yield bloco
         return tamanho, pedacos()
 

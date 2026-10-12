@@ -153,6 +153,73 @@ def test_descartado_nao_move_e_arquivo_preso_tenta_de_novo():
     assert reg.encerrar(timeout=5)
 
 
+def test_trocar_com_as_mesmas_pastas_nao_duplica_nem_reprocessa():
+    pasta, reg, entrada, v = _vigia("pasta_trocar_igual")
+    F.contrato_docx(entrada / "a.docx")
+    (entrada / "ruim.docx").write_bytes(b"nao e docx")
+    v.varrer()
+    novos = v.varrer()
+    assert len(novos) == 2
+    _esperar(lambda: all(d.situacao != "lendo" for d in novos))
+    v.trocar(entrada, entrada / "Processados")                 # a cada gravação da configuração
+    assert v.varrer() == [] and v.varrer() == []
+    v.trocar(entrada, entrada / "Outra")                       # só a Processados muda
+    assert v.varrer() == [] and v.varrer() == []
+    assert len(reg.lista()) == 2
+    assert reg.encerrar(timeout=5)
+
+
+def test_arquivo_preso_sobrevive_a_trocar():
+    from pseudonimizador.web import pasta_monitorada as pm
+    pasta, reg, entrada, v = _vigia("pasta_preso_trocar")
+    F.contrato_docx(entrada / "b.docx")
+    v.varrer()
+    b = v.varrer()[0]
+    _esperar(lambda: b.situacao != "lendo")
+    original = pm.shutil.move
+    estado = {"preso": True}
+
+    def preso(*args, **kw):
+        if estado["preso"]:
+            raise PermissionError("preso")
+        return original(*args, **kw)
+    pm.shutil.move = preso
+    try:
+        v.processado(b)
+        v.trocar(entrada, entrada / "Processados")             # não perde a fila de tentativas
+        estado["preso"] = False
+        v.varrer()
+        assert not (entrada / "b.docx").exists()
+        assert (entrada / "Processados" / "b.docx").is_file()
+    finally:
+        pm.shutil.move = original
+    assert reg.encerrar(timeout=5)
+
+
+def test_arquivo_preso_loga_so_na_primeira_tentativa():
+    from pseudonimizador.web import pasta_monitorada as pm
+    pasta, reg, entrada, v = _vigia("pasta_preso_log")
+    F.contrato_docx(entrada / "b.docx")
+    v.varrer()
+    b = v.varrer()[0]
+    _esperar(lambda: b.situacao != "lendo")
+    original = pm.shutil.move
+
+    def preso(*args, **kw):
+        raise PermissionError("preso")
+    pm.shutil.move = preso
+    try:
+        v.processado(b)
+        v.varrer(); v.varrer(); v.varrer()
+    finally:
+        pm.shutil.move = original
+    for h in v.log.handlers:
+        h.flush()
+    texto = (pasta / "logs" / "servidor.log").read_text(encoding="utf-8")
+    assert texto.count("não foi movido") == 1, texto
+    assert reg.encerrar(timeout=5)
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())
