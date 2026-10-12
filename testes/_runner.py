@@ -7,7 +7,8 @@
         rodar(globals())
 
 Roda toda função test_* em ordem alfabética, imprime ok/FALHA e sai com 1
-se houver falha (é o que testes/executar_todos.py lê)."""
+se houver falha ou se o arquivo não tiver nenhum teste (é o que
+testes/executar_todos.py lê)."""
 import os
 import sys
 
@@ -27,4 +28,6 @@ def rodar(globais: dict) -> None:
             falhas += 1
             print(f"FALHA {nome}\n      {e!r}")
     print(f"\n{len(testes) - falhas}/{len(testes)} passaram, {falhas} falha(s)")
-    sys.exit(1 if falhas else 0)
+    if not testes:
+        print("FALHA nenhuma função test_* neste arquivo")
+    sys.exit(1 if falhas or not testes else 0)
