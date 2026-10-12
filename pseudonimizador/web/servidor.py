@@ -43,6 +43,8 @@ ROTAS: list[tuple[str, str]] = [
     ("DELETE", rf"/api/documentos/{RE_ID}"),
     ("POST", rf"/api/documentos/{RE_ID}/decisao"),
     ("POST", rf"/api/documentos/{RE_ID}/acrescentar"),
+    ("POST", rf"/api/documentos/{RE_ID}/gerar"),
+    ("POST", rf"/api/documentos/{RE_ID}/abrir"),
 ]
 
 
@@ -346,7 +348,26 @@ class Manipulador(BaseHTTPRequestHandler):
             raise ErroDaApi(409, "situacao", str(e)) from None
 
     def _acao_de_geracao(self, id_: str, acao: str, corpo: dict) -> bool:
-        """gerar e abrir: Task 5."""
+        reg, cfg = self.app.registro, self.app.config
+        if acao == "gerar":
+            formato = str(corpo.get("formato") or cfg.formato)
+            tipo = str(corpo.get("tipo") or cfg.tipo)
+            modo = str(corpo.get("modo") or cfg.modo)
+            reg.pedir_geracao(id_, formato=formato, tipo=tipo, modo=modo, pasta_saida=cfg.saida, pasta_mapas=cfg.mapas)
+            self._json(202, {"ok": True, "situacao": "gerando"})
+            return True
+        if acao == "abrir":
+            alvo = corpo.get("alvo")
+            if alvo not in ("arquivo", "pasta"):
+                raise ErroDaApi(400, "corpo", "alvo: arquivo ou pasta")
+            d = reg.obter(id_)
+            if d.situacao != "pronto" or not d.resultado:
+                raise ErroDaApi(409, "situacao", "o documento ainda não foi gerado")
+            saida = Path(d.resultado["saida"])
+            self.app.abrir_no_windows(saida if alvo == "arquivo" else saida.parent)
+            self.app.log.info("documento %s: abrir %s", id_, alvo)
+            self._json(200, {"ok": True})
+            return True
         return False
 
 
