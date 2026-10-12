@@ -13,6 +13,8 @@ INCLUIR: tuple[tuple[str, bool], ...] = (("LICENSE", False), ("CREDITOS.md", Fal
                                          ("pseudonimizador", True))
 PASTAS_EXCLUIDAS = frozenset({"__pycache__", ".git", ".claude", "testes", "saida_testes"})
 SUFIXOS_EXCLUIDOS = frozenset({".pyc", ".pyo", ".bat", ".log", ".pdf", ".docx", ".tmp", ".bak"})
+# lista fechada: sob pseudonimizador/ só estes sufixos viajam; na raiz, só os três arquivos de INCLUIR
+SUFIXOS_PERMITIDOS = frozenset({".py", ".json", ".css", ".js", ".html"})
 NOMES_EXCLUIDOS = frozenset({"config.json", "instancia.json", ".env"})
 # o que, se aparecer na lista final, é erro da montagem (nunca viaja); comparado ao caminho POSIX com "/" nas pontas
 PROIBIDOS_NO_CAMINHO = ("/superpowers/", "/saida_testes/", "/Mapas/", "/Entrada/", "/Saida/", "/termos_proibidos.txt",
@@ -22,7 +24,8 @@ PROIBIDOS_NO_CAMINHO = ("/superpowers/", "/saida_testes/", "/Mapas/", "/Entrada/
 def _aceito(rel: Path) -> bool:
     if any(parte in PASTAS_EXCLUIDAS for parte in rel.parts[:-1]):
         return False
-    return rel.suffix.lower() not in SUFIXOS_EXCLUIDOS and rel.name not in NOMES_EXCLUIDOS
+    return (rel.suffix.lower() in SUFIXOS_PERMITIDOS and rel.suffix.lower() not in SUFIXOS_EXCLUIDOS
+            and rel.name not in NOMES_EXCLUIDOS)
 
 
 def arquivos_do_pacote(raiz: Path) -> list[Path]:
@@ -44,13 +47,35 @@ def arquivos_do_pacote(raiz: Path) -> list[Path]:
     return sorted(achados, key=lambda p: p.as_posix())
 
 
+def _fora_da_lista(rel: Path) -> bool:
+    if len(rel.parts) == 1:
+        return rel.as_posix() not in {e for e, _ in INCLUIR}
+    return rel.parts[0] != "pseudonimizador" or rel.suffix.lower() not in SUFIXOS_PERMITIDOS
+
+
+def _mapa_fora_do_motor(rel: Path) -> bool:
+    nome = rel.name.lower()
+    if "mapa_pseudonimos" in nome:
+        return True
+    return nome.startswith("mapa") and nome.endswith(".json") and rel.parts[:2] != ("pseudonimizador", "motor")
+
+
 def problemas(relativos: list[Path]) -> list[str]:
-    """Uma mensagem por arquivo que nunca pode viajar (lista vazia = ok)."""
+    """Uma mensagem por arquivo que nunca pode viajar (lista vazia = ok). A
+    comparação ignora a caixa; o pacote real pseudonimizador/saida/ é código."""
     saida = []
     for rel in relativos:
-        texto = "/" + Path(rel).as_posix()
+        rel = Path(rel)
+        texto = "/" + rel.as_posix().lower()
+        motivo = None
         for proibido in PROIBIDOS_NO_CAMINHO:
-            if proibido in texto:
-                saida.append(f"não pode entrar no pacote: {texto[1:]} (contém '{proibido.strip('/')}')")
+            if proibido.lower() in texto and not (proibido == "/Saida/" and texto.startswith("/pseudonimizador/saida/")):
+                motivo = f"contém '{proibido.strip('/')}'"
                 break
+        if motivo is None and _fora_da_lista(rel):
+            motivo = "fora da lista fechada de arquivos do pacote"
+        if motivo is None and _mapa_fora_do_motor(rel):
+            motivo = "parece mapa de pseudônimos"
+        if motivo:
+            saida.append(f"não pode entrar no pacote: {rel.as_posix()} ({motivo})")
     return saida

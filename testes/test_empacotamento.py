@@ -49,6 +49,31 @@ def test_manifesto_acusa_o_que_nao_pode_viajar():
     assert manifesto.problemas([Path("pseudonimizador/motor/mapa.py"), Path("LICENSE")]) == []   # "mapa.py" é código
 
 
+def test_manifesto_e_lista_fechada_de_sufixos():
+    with tempfile.TemporaryDirectory() as d:
+        raiz = _arvore(Path(d), ["LICENSE", "pseudonimizador/a.py", "pseudonimizador/web/estatico/i.html",
+                                 "pseudonimizador/web/estatico/e.css", "pseudonimizador/notas.txt",
+                                 "pseudonimizador/x.db", "pseudonimizador/t.csv", "pseudonimizador/p.xlsx"])
+        rel = {p.as_posix() for p in manifesto.arquivos_do_pacote(raiz)}
+    assert rel == {"LICENSE", "pseudonimizador/a.py", "pseudonimizador/web/estatico/i.html",
+                   "pseudonimizador/web/estatico/e.css"}, rel
+    for estranho in ("notas.txt", "x.db", "t.csv", "p.xlsx"):
+        assert manifesto.problemas([Path("pseudonimizador") / estranho]), estranho
+    assert manifesto.problemas([Path("outra/coisa.py")]) and manifesto.problemas([Path("setup.py")])
+
+
+def test_manifesto_acusa_mapa_fora_do_motor_e_ignora_a_caixa():
+    assert manifesto.problemas([Path("pseudonimizador/mapa_pseudonimos.json")])
+    assert manifesto.problemas([Path("pseudonimizador/mapa_x.json")])
+    assert manifesto.problemas([Path("pseudonimizador/web/MAPA-1.JSON")])
+    assert manifesto.problemas([Path("pseudonimizador/motor/mapa_pseudonimos.json")])
+    assert manifesto.problemas([Path("mapas/x.json")]) and manifesto.problemas([Path("Entrada/x.pdf")])
+    assert manifesto.problemas([Path("pseudonimizador/ENTRADA/x.json")])
+    assert manifesto.problemas([Path("pseudonimizador/motor/lexico_ibge.json"),
+                                Path("pseudonimizador/motor/nivel_sinais.json"),
+                                Path("pseudonimizador/saida/mapas.py"), Path("pseudonimizador/saida/docx.py")]) == []
+
+
 def test_manifesto_do_repositorio_real_e_limpo():
     rel = manifesto.arquivos_do_pacote(RAIZ)
     assert Path("pseudonimizador/__init__.py") in rel and Path("LICENSE") in rel and Path("CREDITOS.md") in rel
