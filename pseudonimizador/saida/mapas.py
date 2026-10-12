@@ -18,7 +18,7 @@ def novo_id(nome_base: str) -> str:
 
 def gravar(pasta_mapas: Path, nome_base: str, mapa: dict, identificador: str | None = None) -> tuple[str, Path]:
     identificador = identificador or novo_id(nome_base)
-    mapa["id"] = identificador
+    mapa = {**mapa, "id": identificador}
     caminho = Path(pasta_mapas) / f"{identificador}.json"
     escrever_atomico(caminho, json.dumps(mapa, ensure_ascii=False, indent=1))
     return identificador, caminho

@@ -365,6 +365,22 @@ def _escrever(pagina, area: fitz.Rect, token: str, n: int) -> str | None:
     return f"página {n + 1}: código maior que o espaço do original"
 
 
+def _limpar_extras(pdf) -> None:
+    """Tira da saída o que fica fora do texto da página e pode guardar dado:
+    anotações, campos de formulário, links, índice (outline) e anexos.
+    Superproteção aceita: formulários e links do original não sobrevivem."""
+    for pagina in pdf:
+        for anot in list(pagina.annots() or []):
+            pagina.delete_annot(anot)
+        for campo in list(pagina.widgets() or []):
+            pagina.delete_widget(campo)
+        for link in pagina.get_links():
+            pagina.delete_link(link)
+    pdf.set_toc([])
+    for nome in list(pdf.embfile_names()):
+        pdf.embfile_del(nome)
+
+
 def gerar_pdf_layout(documento, trocas, destino: Path) -> list[str]:
     # Página girada: no PyMuPDF 1.28, tanto os retângulos de get_text quanto os
     # de add_redact_annot/insert_textbox ficam no sistema SEM rotação da página
@@ -430,6 +446,7 @@ def gerar_pdf_layout(documento, trocas, destino: Path) -> list[str]:
             for item in itens:
                 if item.token and (aviso := _escrever(pagina, item.area, item.token, n)):
                     avisos.append(aviso)
+        _limpar_extras(pdf)
         pdf.set_metadata({})
         pdf.del_xml_metadata()
         pdf.save(str(tmp), garbage=4, deflate=True)

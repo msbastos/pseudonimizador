@@ -76,6 +76,70 @@ def test_nota_de_rodape_bloqueia():
     assert not (pasta / "M").exists() or not any((pasta / "M").iterdir())
 
 
+def test_pdf_layout_remove_anotacao_e_toc():
+    import fitz
+    import pseudonimizador.saida.conferencia as C
+    pasta = F.pasta_temporaria("gerar_pdf_extras")
+    caminho = F.contrato_pdf(pasta / "contrato.pdf")
+    pdf = fitz.open(str(caminho))
+    pdf[0].add_text_annot((300, 20), F.PESSOA_1)
+    pdf.set_toc([[1, F.PESSOA_1, 1]])
+    pdf.save(str(pasta / "ex.pdf"))
+    pdf.close()
+    doc = ler(pasta / "ex.pdf")
+    g = gerar(doc, Revisao(doc).fechar(), formato="layout", modo="definitivo",
+              pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    with fitz.open(str(g.saida)) as saida:
+        assert not list(saida[0].annots() or []) and saida.get_toc() == []
+
+
+def test_falha_na_conferencia_apaga_a_saida():
+    import pseudonimizador.saida as S
+    pasta, doc, res = _preparar("gerar_falha")
+    original = S.conferir
+    def quebrada(*a, **k):
+        raise RuntimeError("ocr caiu")
+    S.conferir = quebrada
+    try:
+        gerar(doc, res, formato="layout", modo="reversivel", pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("deveria propagar")
+    finally:
+        S.conferir = original
+    assert not any((pasta / "S").iterdir())
+    assert not (pasta / "M").exists() or not any((pasta / "M").iterdir())
+
+
+def test_aviso_de_valores_curtos_sem_revelar_valor():
+    pasta, doc, res = _preparar("gerar_curtos")
+    res.mapa["tokens"]["[[PESSOA_99]]"] = {"categoria": "pessoa", "valor": "Zeferina"}
+    g = gerar(doc, res, formato="layout", modo="definitivo", pasta_saida=pasta / "S", pasta_mapas=pasta / "M")
+    aviso = [a for a in g.avisos if "não conferido" in a]
+    assert aviso and "Zeferina" not in aviso[0] and aviso[0].startswith("1 valor")
+
+
+def test_pastas_sobrepostas_recusadas():
+    pasta, doc, res = _preparar("gerar_pastas")
+    for saida, mapas in ((pasta / "X", pasta / "X"), (pasta / "X", pasta / "X" / "m"), (pasta / "X" / "s", pasta / "X")):
+        try:
+            gerar(doc, res, formato="layout", modo="reversivel", pasta_saida=saida, pasta_mapas=mapas)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("deveria recusar")
+    assert not (pasta / "X").exists()
+
+
+def test_gravar_nao_altera_o_mapa_do_chamador():
+    from pseudonimizador.saida import mapas
+    pasta = F.pasta_temporaria("gerar_copia")
+    m = {"tokens": {}}
+    mapas.gravar(pasta / "M", "x", m)
+    assert "id" not in m
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..motor.trocas import aplicar_trocas
 from . import mapas
-from .conferencia import VazamentoDetectado, conferir  # noqa: F401
+from .conferencia import VazamentoDetectado, conferir, valores_vigiados  # noqa: F401
 
 PREFIXO_ID = "pseudonimizador:"
 
@@ -39,6 +39,9 @@ def gerar(documento, resultado, *, formato: str, modo: str, pasta_saida: Path, p
     if tipo not in ("docx", "pdf"):
         raise ValueError("no formato 'texto', escolha o tipo: docx ou pdf")
     pasta_saida = Path(pasta_saida)
+    a, b = pasta_saida.resolve(), Path(pasta_mapas).resolve()
+    if a == b or a in b.parents or b in a.parents:
+        raise ValueError("a pasta dos mapas não pode ser a da saída nem ficar dentro dela (ou vice-versa)")
     pasta_saida.mkdir(parents=True, exist_ok=True)
     rotulo = "pseudonimizado" if modo == "reversivel" else "anonimizado"
     destino = _destino(pasta_saida, f"{Path(documento.caminho).stem} - {rotulo}", f".{tipo}")
@@ -60,10 +63,17 @@ def gerar(documento, resultado, *, formato: str, modo: str, pasta_saida: Path, p
         avisos += gerar_pdf_layout(documento, resultado.trocas, destino)
         paginas_ocr = documento.paginas_ocr
 
-    vazados = conferir(destino, resultado.mapa, paginas_ocr)
+    try:
+        vazados = conferir(destino, resultado.mapa, paginas_ocr)
+    except BaseException:
+        destino.unlink(missing_ok=True)
+        raise
     if vazados:
         destino.unlink(missing_ok=True)
         raise VazamentoDetectado(vazados)
+    pulados = valores_vigiados(resultado.mapa, devolver_pulados=True)[1]
+    if pulados:
+        avisos.append(f"{len(pulados)} valor(es) curto(s) não conferido(s) automaticamente")
 
     caminho_mapa = None
     if modo == "reversivel":
