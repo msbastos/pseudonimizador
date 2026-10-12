@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pseudonimizador</title>
+<link rel="stylesheet" href="/estatico/app.css">
+</head>
+<body>
+<header class="topo">
+  <h1>Pseudonimizador</h1>
+  <nav aria-label="Telas">
+    <button type="button" data-tela="documentos" aria-current="page">Documentos</button>
+    <button type="button" data-tela="restaurar">Restaurar nomes</button>
+    <button type="button" data-tela="configuracoes">Configurações</button>
+    <button type="button" id="encerrar" class="secundario">Encerrar</button>
+  </nav>
+</header>
+<p id="mensagem" class="mensagem" role="status" aria-live="polite" hidden></p>
+<main>
+
+<section id="tela-documentos" aria-labelledby="h-documentos">
+  <h2 id="h-documentos">Documentos</h2>
+  <div id="zona" class="zona" tabindex="0" role="button" aria-describedby="zona-ajuda">
+    <p>Arraste aqui um DOCX ou PDF, ou <label for="arquivos" class="ligacao">escolha os arquivos</label>.</p>
+    <p id="zona-ajuda" class="ajuda">Até 100 MB por arquivo. Tudo é processado neste computador; nada sai dele.</p>
+    <input type="file" id="arquivos" class="oculto" accept=".docx,.pdf" multiple>
+  </div>
+  <h3>Enviados pela janela</h3>
+  <ul id="lista-janela" class="lista"></ul>
+  <h3>Pendentes (pasta Entrada)</h3>
+  <p class="ajuda">Arquivos colocados em <code id="pasta-entrada"></code> aparecem aqui para revisão; depois de gerados, o original vai para Entrada\Processados.</p>
+  <ul id="lista-pasta" class="lista"></ul>
+</section>
+
+<section id="tela-revisao" hidden aria-labelledby="h-revisao">
+  <h2 id="h-revisao">Revisão: <span id="rev-nome"></span></h2>
+  <ul id="rev-avisos" class="avisos"></ul>
+  <div id="rev-erro" class="erro" hidden>
+    <p id="rev-erro-mensagem"></p>
+    <ul id="rev-erro-valores"></ul>
+  </div>
+  <p class="ajuda">Tudo começa marcado para substituir. Desmarque o que deve ficar em claro. Aceitar um nome aceita todas as suas ocorrências e variantes.</p>
+  <table class="itens">
+    <caption>Dados encontrados</caption>
+    <thead><tr><th scope="col">Substituir</th><th scope="col">Categoria</th><th scope="col">Valor</th><th scope="col">Ocorrências</th><th scope="col">Trechos</th></tr></thead>
+    <tbody id="rev-itens"></tbody>
+  </table>
+  <form id="form-acrescentar" class="linha">
+    <label for="acr-valor">Acrescentar o que escapou</label>
+    <input id="acr-valor" type="text" required autocomplete="off" placeholder="texto exatamente como está no documento">
+    <label for="acr-categoria">Categoria</label>
+    <select id="acr-categoria"></select>
+    <button type="submit">Acrescentar</button>
+  </form>
+  <form id="form-gerar">
+    <fieldset>
+      <legend>Formato</legend>
+      <label><input type="radio" name="formato" value="layout" checked> Layout original (DOCX→DOCX, PDF→PDF)</label>
+      <label><input type="radio" name="formato" value="texto"> Documento novo só com o texto</label>
+    </fieldset>
+    <fieldset id="campo-tipo">
+      <legend>Tipo do documento novo</legend>
+      <label><input type="radio" name="tipo" value="docx" checked> Word (DOCX)</label>
+      <label><input type="radio" name="tipo" value="pdf"> PDF</label>
+    </fieldset>
+    <fieldset>
+      <legend>Modo</legend>
+      <label><input type="radio" name="modo" value="reversivel" checked> Reversível (pseudonimização; o mapa fica na pasta Mapas)</label>
+      <label><input type="radio" name="modo" value="definitivo"> Definitivo (anonimização; sem mapa)</label>
+    </fieldset>
+    <p class="linha">
+      <button type="submit" id="botao-gerar">Gerar</button>
+      <button type="button" id="rev-voltar" class="secundario">Voltar</button>
+    </p>
+  </form>
+</section>
+
+<section id="tela-resultado" hidden aria-labelledby="h-resultado">
+  <h2 id="h-resultado">Pronto</h2>
+  <p>Arquivo gerado: <strong id="res-saida"></strong></p>
+  <p id="res-mapa-linha" hidden>Mapa (guarde à parte; é dado pessoal): <code id="res-mapa"></code></p>
+  <ul id="res-avisos" class="avisos"></ul>
+  <p class="linha">
+    <button type="button" id="res-abrir-arquivo">Abrir arquivo</button>
+    <button type="button" id="res-abrir-pasta">Abrir pasta de saída</button>
+    <button type="button" id="res-voltar" class="secundario">Voltar aos documentos</button>
+  </p>
+</section>
+
+<section id="tela-restaurar" hidden aria-labelledby="h-restaurar">
+  <h2 id="h-restaurar">Restaurar nomes</h2>
+  <form id="form-rest-docx">
+    <h3>A partir de um DOCX pseudonimizado</h3>
+    <label for="rest-arquivo">Arquivo DOCX</label>
+    <input id="rest-arquivo" type="file" accept=".docx" required>
+    <label for="rest-mapa-docx">Mapa (só se o arquivo não indicar o seu)</label>
+    <select id="rest-mapa-docx"></select>
+    <p class="linha"><button type="submit">Restaurar DOCX</button></p>
+    <p id="rest-docx-resultado" role="status" aria-live="polite"></p>
+  </form>
+  <form id="form-rest-texto">
+    <h3>A partir de texto colado</h3>
+    <label for="rest-texto">Texto com os tókens [[...]]</label>
+    <textarea id="rest-texto" rows="8" required></textarea>
+    <label for="rest-mapa-texto">Mapa</label>
+    <select id="rest-mapa-texto" required></select>
+    <p class="linha"><button type="submit">Restaurar texto</button></p>
+    <label for="rest-texto-saida">Texto restaurado</label>
+    <textarea id="rest-texto-saida" rows="8" readonly></textarea>
+  </form>
+</section>
+
+<section id="tela-configuracoes" hidden aria-labelledby="h-config">
+  <h2 id="h-config">Configurações</h2>
+  <form id="form-config">
+    <label for="cfg-base">Pasta base (Entrada, Saida e Mapas ficam dentro dela)</label>
+    <input id="cfg-base" type="text" required>
+    <label for="cfg-saida">Pasta de saída (vazio: Saida dentro da base)</label>
+    <input id="cfg-saida" type="text">
+    <label for="cfg-mapas">Pasta dos mapas (vazio: Mapas dentro da base; nunca dentro da saída)</label>
+    <input id="cfg-mapas" type="text">
+    <fieldset>
+      <legend>Padrões do lote (pasta Entrada)</legend>
+      <label for="cfg-formato">Formato</label>
+      <select id="cfg-formato"><option value="layout">Layout original</option><option value="texto">Só o texto</option></select>
+      <label for="cfg-tipo">Tipo (só para "só o texto")</label>
+      <select id="cfg-tipo"><option value="docx">Word (DOCX)</option><option value="pdf">PDF</option></select>
+      <label for="cfg-modo">Modo</label>
+      <select id="cfg-modo"><option value="reversivel">Reversível</option><option value="definitivo">Definitivo</option></select>
+    </fieldset>
+    <p class="linha"><button type="submit">Salvar</button></p>
+  </form>
+</section>
+
+</main>
+<footer class="rodape"><small>Pseudonimizador <span id="versao"></span> · tudo roda neste computador.</small></footer>
+<script src="/estatico/app.js"></script>
+</body>
+</html>
