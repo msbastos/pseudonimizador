@@ -606,6 +606,28 @@ def test_roteiro_do_mantenedor_cobre_montagem_aceitacao_e_limites():
         assert exigido in texto, exigido
 
 
+def test_iss_recusa_pasta_dentro_do_programa_ou_do_estado_e_versao_numerica():
+    iss = _iss()
+    prox = iss.split("function NextButtonClick")[1].split("\nend;")[0]
+    assert "{app}" in prox and "{localappdata}\\Pseudonimizador" in prox and "Lowercase(" in iss and "DentroDe(" in prox
+    assert "dentro da pasta do programa" in prox
+    assert "VersionInfoVersion={#VersaoNum}.0" in iss and "AppVersion={#Versao}" in iss
+    assert "#ifndef VersaoNum" in iss
+    args = construir.argumentos_iscc(Path("ISCC.exe"), Path("x.iss"), versao="0.3.0rc1", origem=Path("a"),
+                                     saida=Path("dist"))
+    assert "/DVersao=0.3.0rc1" in args and "/DVersaoNum=0.3.0" in args
+    assert construir.versao_numerica("1.2.3-beta.4") == "1.2.3" and construir.versao_numerica("2.0") == "2.0.0"
+
+
+def test_wsb_escapa_o_caminho_em_xml():
+    modelo = RAIZ / "empacotamento" / "sandbox.wsb.modelo"
+    with tempfile.TemporaryDirectory() as d:
+        texto = construir.gerar_wsb(modelo, Path(d) / "a&b<c" / "dist")
+    assert "a&amp;b&lt;c" in texto and "a&b" not in texto
+    import xml.dom.minidom
+    xml.dom.minidom.parseString(texto)
+
+
 if __name__ == "__main__":
     from _runner import rodar
     rodar(globals())

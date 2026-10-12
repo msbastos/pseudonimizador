@@ -4,6 +4,9 @@
 #ifndef Versao
   #error Passe /DVersao=x.y.z (construir.py faz isso)
 #endif
+#ifndef VersaoNum
+  #define VersaoNum Versao
+#endif
 #ifndef Origem
   #define Origem "..\build\app"
 #endif
@@ -14,7 +17,7 @@ AppName=Pseudonimizador
 AppVersion={#Versao}
 AppVerName=Pseudonimizador {#Versao}
 AppPublisher=Pseudonimizador — proteção de dados pessoais em documentos
-VersionInfoVersion={#Versao}.0
+VersionInfoVersion={#VersaoNum}.0
 DefaultDirName={localappdata}\Programs\Pseudonimizador
 DisableDirPage=yes
 DefaultGroupName=Pseudonimizador
@@ -93,12 +96,27 @@ begin
   Result := (PageID = PaginaPasta.ID) and ConfigExiste;
 end;
 
+function DentroDe(Pasta, Raiz: String): Boolean;
+begin
+  Pasta := Lowercase(AddBackslash(Trim(Pasta)));
+  Raiz := Lowercase(AddBackslash(Raiz));
+  Result := Copy(Pasta, 1, Length(Raiz)) = Raiz;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  if (CurPageID = PaginaPasta.ID) and (Trim(PaginaPasta.Values[0]) = '') then
+  if CurPageID <> PaginaPasta.ID then exit;
+  if Trim(PaginaPasta.Values[0]) = '' then
   begin
     MsgBox('Informe a pasta dos arquivos.', mbInformation, MB_OK);
+    Result := False;
+  end
+  else if DentroDe(PaginaPasta.Values[0], ExpandConstant('{app}')) or
+          DentroDe(PaginaPasta.Values[0], ExpandConstant('{localappdata}\Pseudonimizador')) then
+  begin
+    // o desinstalador apaga essas duas pastas: os arquivos do usuário não podem ficar nelas
+    MsgBox('A pasta dos arquivos não pode ficar dentro da pasta do programa nem da pasta de configurações do Pseudonimizador (a desinstalação poderia apagá-la). Escolha outra, como Documentos.', mbError, MB_OK);
     Result := False;
   end;
 end;

@@ -117,10 +117,18 @@ def localizar_iscc(explicito: Path | None) -> Path | None:
     return next((p for p in ISCC_PADRAO if p.is_file()), None)
 
 
+def versao_numerica(versao: str) -> str:
+    """Só os números (x.y.z) para o VersionInfoVersion do Windows: '0.3.0rc1' -> '0.3.0'."""
+    import re
+    nums = re.match(r"\d+(?:\.\d+)*", versao.strip())
+    partes = (nums.group(0) if nums else "0").split(".")[:3]
+    return ".".join((partes + ["0", "0"])[:3])
+
+
 def argumentos_iscc(iscc: Path, iss: Path, *, versao: str, origem: Path, saida: Path,
                     nome_setup: str | None = None) -> list[str]:
     extra = [f"/F{Path(nome_setup).stem}"] if nome_setup else []   # /F: nome do instalador, sem extensão
-    return [str(iscc), f"/DVersao={versao}", f"/DOrigem={origem}", f"/O{saida}", *extra, str(iss)]
+    return [str(iscc), f"/DVersao={versao}", f"/DVersaoNum={versao_numerica(versao)}", f"/DOrigem={origem}", f"/O{saida}", *extra, str(iss)]
 
 
 def _baixar_padrao(url: str, destino: Path, sha256: str) -> Path:
@@ -208,7 +216,8 @@ def fumacar(app: Path, *, executar=_executar_padrao) -> None:
 
 def gerar_wsb(modelo: Path, dist: Path) -> str:
     """Config do Windows Sandbox: mapeia dist/ (só leitura) e abre o Setup. {DIST} vem do modelo."""
-    return Path(modelo).read_text(encoding="utf-8").replace("{DIST}", str(Path(dist).resolve()))
+    from xml.sax.saxutils import escape
+    return Path(modelo).read_text(encoding="utf-8").replace("{DIST}", escape(str(Path(dist).resolve())))
 
 
 def main(argv=None) -> int:
