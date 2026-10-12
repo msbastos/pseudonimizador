@@ -16,7 +16,7 @@ do runtime do Visual C++ (app-local: sem vc_redist, sem administrador; nunca do
 System32 num build publicado); 5) copia o código pelo manifesto e o ícone; 6)
 fumaça: o Python embarcado, a partir de OUTRA pasta e com a rede bloqueada,
 importa tudo, lê DOCX/PDF/OCR, gera e restaura (empacotamento/fumaca.py); 7)
-ISCC com /DVersao e /DOrigem; escreve dist/SHA256SUMS.txt e o .wsb do Sandbox.
+ISCC com /DVersao e /DOrigem; escreve dist/SHA256SUMS.txt (build/ guarda o .wsb do Sandbox).
 """
 from __future__ import annotations
 
@@ -42,6 +42,15 @@ ISCC_PADRAO = (Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Set
                Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Inno Setup 6" / "ISCC.exe")
 FUMACA = Path(__file__).resolve().parent / "fumaca.py"
 NOME_SETUP = "Pseudonimizador-Setup.exe"
+NOME_SETUP_TESTE = "Pseudonimizador-Setup-TESTE.exe"   # build com --crt-do-sistema: nunca se publica
+
+
+def nome_do_setup(teste: bool) -> str:
+    return NOME_SETUP_TESTE if teste else NOME_SETUP
+
+
+def linha_sha256sums(nome: str, dados: bytes) -> str:
+    return f"{hashlib.sha256(dados).hexdigest()}  {nome}\n"
 
 
 def ler_python_embarcavel(toml: Path) -> dict:
@@ -64,7 +73,7 @@ def conteudo_pth() -> str:
 def argumentos_pip(lock: Path, destino: Path) -> list[str]:
     return [sys.executable, "-m", "pip", "install", "--no-deps", "--require-hashes", "--only-binary=:all:",
             "--python-version", SERIE, "--platform", "win_amd64", "--implementation", "cp", "--abi", "cp314",
-            "--upgrade", "--target", str(destino), "-r", str(lock)]
+            "--isolated", "--upgrade", "--target", str(destino), "-r", str(lock)]
 
 
 def nomes_do_crt() -> tuple[str, ...]:
@@ -78,6 +87,17 @@ def localizar_crt(candidatos: list[Path]) -> Path | None:
     return None
 
 
+def _numeros(texto: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in texto.split(".") if x.isdigit())
+
+
+def _chave_versao(pasta: Path) -> tuple:
+    """Versão numérica: VS (18 > 17...), depois MSVC (14.10 > 14.9); a ordem alfabética erraria."""
+    p = pasta.parts
+    vs = _numeros(p[p.index("Microsoft Visual Studio") + 1]) if "Microsoft Visual Studio" in p else ()
+    return vs, _numeros(pasta.parent.parent.name)
+
+
 def candidatos_crt(sistema: bool = False) -> list[Path]:
     """Onde procurar o CRT redistribuível (Visual Studio 2022/18: Microsoft.VC14x.CRT). O System32 só entra com
     a flag explícita (--crt-do-sistema): as DLLs dele são da versão do Windows da máquina, não as do redistribuível."""
@@ -85,7 +105,7 @@ def candidatos_crt(sistema: bool = False) -> list[Path]:
     for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
         if base:
             achados += sorted(Path(base).glob("Microsoft Visual Studio/*/*/VC/Redist/MSVC/*/x64/Microsoft.VC14?.CRT"),
-                              reverse=True)
+                              key=_chave_versao, reverse=True)
     if sistema:
         achados.append(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
     return achados
@@ -97,8 +117,10 @@ def localizar_iscc(explicito: Path | None) -> Path | None:
     return next((p for p in ISCC_PADRAO if p.is_file()), None)
 
 
-def argumentos_iscc(iscc: Path, iss: Path, *, versao: str, origem: Path, saida: Path) -> list[str]:
-    return [str(iscc), f"/DVersao={versao}", f"/DOrigem={origem}", f"/O{saida}", str(iss)]
+def argumentos_iscc(iscc: Path, iss: Path, *, versao: str, origem: Path, saida: Path,
+                    nome_setup: str | None = None) -> list[str]:
+    extra = [f"/F{Path(nome_setup).stem}"] if nome_setup else []   # /F: nome do instalador, sem extensão
+    return [str(iscc), f"/DVersao={versao}", f"/DOrigem={origem}", f"/O{saida}", *extra, str(iss)]
 
 
 def _baixar_padrao(url: str, destino: Path, sha256: str) -> Path:
@@ -124,6 +146,12 @@ def montar(raiz: Path, build: Path, *, executar=_executar_padrao, baixar=_baixar
     from empacotamento import manifesto
     raiz, build = Path(raiz), Path(build)
     app = build / "app"
+    if crt is not None:   # --crt explícito: valida antes de gastar o build
+        if not crt_do_sistema and Path(crt).name.lower() == "system32":
+            raise SystemExit("--crt aponta para o System32: as DLLs de lá são do Windows desta máquina, não o "
+                             "redistribuível; só num build de teste, com --crt-do-sistema (não publique)")
+        if localizar_crt([crt]) is None:
+            raise SystemExit(f"--crt {crt}: não achei {', '.join(CRT_OBRIGATORIAS)} nessa pasta")
     if app.exists():
         shutil.rmtree(app)
     (app / "python").mkdir(parents=True)
@@ -131,10 +159,15 @@ def montar(raiz: Path, build: Path, *, executar=_executar_padrao, baixar=_baixar
     py = ler_python_embarcavel(raiz / "empacotamento" / "python-embarcavel.toml")
     cache = raiz / "empacotamento" / "_cache"
     cache.mkdir(parents=True, exist_ok=True)
+    if not py["versao"].startswith(SERIE + "."):
+        raise SystemExit(f"python-embarcavel.toml é da {py['versao']}, mas o lock e o ._pth são da série {SERIE}")
     zip_local = baixar(py["url"], cache / Path(py["url"]).name, py["sha256"])
     if "tamanho" in py and Path(zip_local).stat().st_size != py["tamanho"]:
         raise SystemExit(f"tamanho do Python embarcável não bate: esperado {py['tamanho']} bytes, "
                          f"veio {Path(zip_local).stat().st_size}")
+    real = hashlib.sha256(Path(zip_local).read_bytes()).hexdigest()   # não confia em quem baixou
+    if real != py["sha256"]:
+        raise SystemExit(f"sha256 do Python embarcável não bate: esperado {py['sha256']}, veio {real}")
     with zipfile.ZipFile(zip_local) as z:
         z.extractall(app / "python")
     (app / "python" / "python314._pth").write_text(conteudo_pth(), encoding="utf-8")
@@ -200,16 +233,24 @@ def main(argv=None) -> int:
         print("ISCC.exe não encontrado: instale o Inno Setup 6 ou passe --iscc.")
         return 2
     dist.mkdir(exist_ok=True)
+    teste = args.crt_do_sistema
+    setup = dist / nome_do_setup(teste)
+    setup.unlink(missing_ok=True)   # um Setup velho não passa por novo
     rc = _executar_padrao(argumentos_iscc(iscc, RAIZ / "empacotamento" / "pseudonimizador.iss", versao=VERSAO,
-                                          origem=app, saida=dist))
+                                          origem=app, saida=dist, nome_setup=setup.name))
     if rc != 0:
         return rc
-    setup = dist / NOME_SETUP
-    (dist / "SHA256SUMS.txt").write_text(f"{hashlib.sha256(setup.read_bytes()).hexdigest()}  {setup.name}\n",
-                                         encoding="utf-8")
-    (dist / "Pseudonimizador-Sandbox.wsb").write_text(
+    if not setup.is_file():
+        raise SystemExit(f"o ISCC terminou sem erro, mas {setup} não existe")
+    # O .wsb vai para build/: dist/ guarda só o que se publica.
+    (build / "Pseudonimizador-Sandbox.wsb").write_text(
         gerar_wsb(RAIZ / "empacotamento" / "sandbox.wsb.modelo", dist), encoding="utf-8")
-    print(f"pronto: {setup} ({setup.stat().st_size // 1_000_000} MB), SHA256SUMS.txt e Pseudonimizador-Sandbox.wsb em {dist}")
+    if teste:
+        print(f"TESTE: {setup}; sem SHA256SUMS.txt; não publique. Sandbox: {build / 'Pseudonimizador-Sandbox.wsb'}")
+        return 0
+    (dist / "SHA256SUMS.txt").write_text(linha_sha256sums(setup.name, setup.read_bytes()), encoding="utf-8")
+    print(f"pronto: {setup} ({setup.stat().st_size // 1_000_000} MB) e SHA256SUMS.txt em {dist}; "
+          f"Pseudonimizador-Sandbox.wsb em {build}")
     return 0
 
 

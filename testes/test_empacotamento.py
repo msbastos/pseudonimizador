@@ -144,6 +144,7 @@ def test_python_embarcavel_tem_versao_url_e_hash():
     assert len(d["sha256"]) == 64 and int(d["sha256"], 16) > 0 and d["sha256"] != "0" * 64
 
 
+import hashlib  # noqa: E402
 import io  # noqa: E402
 import sys  # noqa: E402
 import zipfile  # noqa: E402
@@ -171,7 +172,7 @@ def _repo_falso(tmp: Path, *, icone: bool = True) -> Path:
     (raiz / "empacotamento").mkdir()
     (raiz / "empacotamento" / "python-embarcavel.toml").write_text(
         'versao = "3.14.0"\nurl = "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip"\n'
-        'sha256 = "' + "0" * 64 + '"\n', encoding="utf-8")
+        'sha256 = "' + hashlib.sha256(_zip_python_falso()).hexdigest() + '"\n', encoding="utf-8")
     if icone:
         (raiz / "empacotamento" / "pseudonimizador.ico").write_bytes(b"\x00\x00\x01\x00")
     return raiz
@@ -353,6 +354,114 @@ def test_argumentos_do_iscc_e_localizacao():
         falso.write_bytes(b"MZ")
         assert construir.localizar_iscc(falso) == falso
         assert construir.localizar_iscc(Path(d) / "nao-existe.exe") is None
+
+
+def _crt_falso(pasta: Path) -> Path:
+    pasta.mkdir(parents=True, exist_ok=True)
+    for n in construir.nomes_do_crt():
+        (pasta / n).write_bytes(b"MZ")
+    return pasta
+
+
+def _montar_falso(tmp: Path, **kw):
+    raiz = tmp / "repo" if (tmp / "repo").exists() else _repo_falso(tmp)
+    kw.setdefault("baixar", lambda url, destino, sha: (destino.write_bytes(_zip_python_falso()), destino)[1])
+    return construir.montar(raiz, tmp / "build", executar=lambda *a, **k: 0, fumaca=False, **kw)
+
+
+def test_crt_explicito_vazio_ou_com_typo_e_recusado():
+    with tempfile.TemporaryDirectory() as d:
+        vazia = Path(d) / "crt-vazia"
+        vazia.mkdir()
+        for pasta in (vazia, Path(d) / "nao-existe"):
+            try:
+                _montar_falso(Path(d), crt=pasta)
+            except SystemExit as e:
+                assert "--crt" in str(e)
+            else:
+                raise AssertionError("--crt sem as DLLs deveria dar SystemExit")
+
+
+def test_crt_explicito_system32_exige_a_flag_do_sistema():
+    with tempfile.TemporaryDirectory() as d:
+        sys32 = _crt_falso(Path(d) / "Windows" / "System32")
+        try:
+            _montar_falso(Path(d), crt=sys32)
+        except SystemExit as e:
+            assert "--crt-do-sistema" in str(e)
+        else:
+            raise AssertionError("System32 sem a flag deveria dar SystemExit")
+        assert (_montar_falso(Path(d), crt=sys32, crt_do_sistema=True) / "python" / "msvcp140.dll").is_file()
+
+
+def test_build_de_teste_tem_outro_nome_e_o_iscc_recebe_o_nome():
+    assert construir.nome_do_setup(False) == "Pseudonimizador-Setup.exe"
+    assert construir.nome_do_setup(True) == "Pseudonimizador-Setup-TESTE.exe"
+    args = construir.argumentos_iscc(Path("ISCC.exe"), Path("x.iss"), versao="0.2.0", origem=Path("a"),
+                                     saida=Path("dist"), nome_setup=construir.nome_do_setup(True))
+    assert "/FPseudonimizador-Setup-TESTE" in args
+
+
+def test_linha_do_sha256sums_e_o_wsb_substitui_o_dist():
+    dados = b"instalador"
+    assert construir.linha_sha256sums("Pseudonimizador-Setup.exe", dados) == \
+        hashlib.sha256(dados).hexdigest() + "  Pseudonimizador-Setup.exe\n"
+    with tempfile.TemporaryDirectory() as d:
+        modelo = Path(d) / "m.wsb"
+        modelo.write_text("<Host>{DIST}</Host><Host>{DIST}</Host>", encoding="utf-8")
+        saida = construir.gerar_wsb(modelo, Path(d) / "dist")
+        assert "{DIST}" not in saida and saida.count(str((Path(d) / "dist").resolve())) == 2
+
+
+def test_montar_confere_o_hash_do_zip_por_conta_propria():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        crt = _crt_falso(tmp / "crt")
+        try:
+            _montar_falso(tmp, crt=crt, baixar=lambda url, destino, sha: (destino.write_bytes(b"outro zip"), destino)[1])
+        except SystemExit as e:
+            assert "sha256" in str(e)
+        else:
+            raise AssertionError("zip com hash diferente deveria ser recusado mesmo com baixar falso")
+
+
+def test_python_embarcavel_fora_da_serie_e_recusado():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        raiz = _repo_falso(tmp)
+        toml = raiz / "empacotamento" / "python-embarcavel.toml"
+        toml.write_text(toml.read_text(encoding="utf-8").replace('"3.14.0"', '"3.13.9"'), encoding="utf-8")
+        try:
+            construir.montar(raiz, tmp / "build", executar=lambda *a, **k: 0, crt=_crt_falso(tmp / "crt"), fumaca=False)
+        except SystemExit as e:
+            assert "3.14" in str(e)
+        else:
+            raise AssertionError("versão fora da série deveria dar SystemExit")
+
+
+def test_candidatos_do_crt_ordenados_por_versao_numerica():
+    import os
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        for msvc in ("14.9.1", "14.10.5", "14.9.9", "14.50.1"):
+            (base / "Microsoft Visual Studio" / "18" / "Community" / "VC" / "Redist" / "MSVC" / msvc / "x64" /
+             "Microsoft.VC145.CRT").mkdir(parents=True)
+        antigo = {k: os.environ.get(k) for k in ("ProgramFiles", "ProgramFiles(x86)")}
+        os.environ["ProgramFiles"] = str(base)
+        os.environ.pop("ProgramFiles(x86)", None)
+        try:
+            achados = [p.parent.parent.name for p in construir.candidatos_crt()]
+        finally:
+            for k, v in antigo.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        assert achados == ["14.50.1", "14.10.5", "14.9.9", "14.9.1"], achados
+
+
+def test_pip_roda_isolado():
+    assert "--isolated" in construir.argumentos_pip(Path("requirements.lock"), Path("x"))
 
 
 if __name__ == "__main__":
