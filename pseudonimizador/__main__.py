@@ -6,6 +6,7 @@
   detectar  ARQ --revisao R.json        detecta e grava a revisão para editar
   gerar     ARQ [--revisao R.json] ...  aplica a revisão e gera a saída
   restaurar ARQ.docx|--texto T.txt ...  devolve os nomes (modo reversível)
+  configurar --pasta-base PASTA         grava a pasta dos arquivos e cria Entrada, Saida e Mapas (o instalador usa)
 """
 from __future__ import annotations
 
@@ -101,6 +102,22 @@ def _restaurar(a) -> int:
     return 0
 
 
+def _configurar(a) -> int:
+    """Grava a pasta dos arquivos na config (mantendo os outros campos, se já havia
+    config) e cria as pastas. O instalador chama isto ao terminar."""
+    from dataclasses import asdict
+    from . import estado
+    pasta = estado.pasta_estado()
+    dados = asdict(estado.carregar(pasta))
+    dados["pasta_base"] = str(a.pasta_base)
+    cfg = estado.validar(dados)
+    pasta.mkdir(parents=True, exist_ok=True)
+    estado.gravar(pasta, cfg)
+    estado.preparar_pastas(cfg)
+    print(f"pasta dos arquivos: {cfg.pasta_base}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="pseudonimizador", description=f"Pseudonimizador {VERSAO} — sem subcomando, abre a janela")
     sub = p.add_subparsers(dest="comando", required=False)
@@ -121,6 +138,8 @@ def main(argv=None) -> int:
     r.add_argument("--saida", type=Path)
     r.add_argument("--mapa", type=Path)
     r.add_argument("--mapas", type=Path, default=Path("Mapas"))
+    c = sub.add_parser("configurar", help="grava a pasta dos arquivos (o instalador usa)")
+    c.add_argument("--pasta-base", type=Path, required=True)
     a = p.parse_args(argv)
     if a.comando is None:
         from .web import abrir
@@ -130,7 +149,8 @@ def main(argv=None) -> int:
     from .restaurar import TokenOrfao
     from .saida import VazamentoDetectado
     try:
-        return {"detectar": _detectar, "gerar": _gerar, "restaurar": _restaurar}[a.comando](a)
+        return {"detectar": _detectar, "gerar": _gerar, "restaurar": _restaurar,
+                "configurar": _configurar}[a.comando](a)
     except (ErroDeLeitura, ValueError, OSError) as e:
         print(f"erro: {e}", file=sys.stderr)
         return 2
